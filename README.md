@@ -38,7 +38,9 @@ python start.py <wiki_root_path> [c]
 ### 参数说明
 
 - `<wiki_root_path>` (必需): Wiki 内容的根目录路径
-- `c` (可选): 如果提供此参数，会先将所有 Markdown 文件转换为 JSON 格式
+- `c` (可选): 如果提供此参数，会先将所有 Markdown/wiki结果的json 文件转换为 JSON 格式
+
+**注意：如果wiki结果为json，请以.meta.json结尾**
 
 ### 使用示例
 
@@ -64,6 +66,8 @@ python start.py /path/to/wiki c
 2. 将它们转换为 JSON 格式并保存到 `/path/to/wiki/wiki_result` 目录
 3. 保持原有的目录结构
 4. 启动前端和后端服务器
+
+
 
 ### 查看结果
 **浏览器打开 http://localhost:3000
