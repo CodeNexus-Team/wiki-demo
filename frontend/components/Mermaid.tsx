@@ -9,6 +9,7 @@ mermaid.initialize({
   startOnLoad: false,
   theme: 'base',
   securityLevel: 'loose',
+  suppressErrorRendering: true,
   fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
   themeVariables: {
     primaryColor: '#ffffff',

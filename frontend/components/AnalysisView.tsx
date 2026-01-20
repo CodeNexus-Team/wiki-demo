@@ -1129,7 +1129,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         )}
 
         {blocks.length > 0 && (
-          <div className="px-4 md:px-12 pt-8 max-w-7xl mx-auto">
+          <div className="px-4 md:px-12 pt-8">
             <div className="flex gap-6">
               {/* 左侧：页面导航 */}
               {wikiPages.length > 1 && (
@@ -1193,20 +1193,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                   {/* Wiki Header */}
                   <div className="mb-8 pb-6 border-b border-[#f5f5f7] flex justify-between items-center">
                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-[#86868b] bg-[#F5F5F7] px-3 py-1 rounded-full uppercase tracking-wide">
-                            Wiki Object Mode
+                        <span className="text-xs font-medium text-[#0071E3] bg-blue-50 px-3 py-1 rounded-full flex items-center gap-1">
+                            <Sparkles size={10} /> 交互式代码Wiki
                         </span>
-                        {isDiffMode ? (
+                        {isDiffMode && (
                             <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1 rounded-full flex items-center gap-1 animate-pulse">
-                                <FileDiff size={12} /> Reviewing Changes
-                            </span>
-                        ) : (
-                            <span className="text-xs text-[#0071E3] bg-blue-50 px-3 py-1 rounded-full flex items-center gap-1">
-                                <Sparkles size={10} /> Interactive
+                                <FileDiff size={12} /> 审查变更中
                             </span>
                         )}
                      </div>
-                     <span className="text-xs text-[#d2d2d7] font-mono">{blocks.length} Objects</span>
+                     <span className="text-xs text-[#d2d2d7] font-mono">{blocks.length} 个对象</span>
                   </div>
                   
                   {/* Wiki Content */}

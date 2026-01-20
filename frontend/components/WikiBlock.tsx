@@ -177,7 +177,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
         const style = headingStyles[level as keyof typeof headingStyles] || headingStyles[2];
 
         return (
-          <div className="flex items-center gap-2">
+          <div className="relative">
             {/* Collapse button for headings with children */}
             {hasChildren && onToggleCollapse && (
               <button
@@ -185,7 +185,10 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                   e.stopPropagation();
                   onToggleCollapse(block.id);
                 }}
-                className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-gray-100 transition-colors text-gray-500 hover:text-gray-700"
+                className={`
+                  absolute -left-7 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-gray-100 transition-all duration-300 text-gray-500 hover:text-gray-700
+                  ${isHovered ? 'opacity-100' : 'opacity-0'}
+                `}
                 title={isCollapsed ? "展开" : "折叠"}
               >
                 {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
@@ -275,7 +278,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
         relative group/block transition-all duration-300
         ${block.status === 'deleted' ? 'line-through decoration-red-300' : ''}
       `}
-      style={{ paddingLeft: `${(block.depth || 0) * 1.5}rem` }}
+      style={{ paddingLeft: 0 }}
     >
       <div
         className={`

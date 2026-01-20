@@ -54,13 +54,15 @@ function buildPageTree(pages: string[]): WikiPageNode[] {
     });
   });
 
-  // 转换为数组并递归处理
+  // 转换为数组并递归处理，按字典序排序
   const convertToArray = (obj: any): WikiPageNode[] => {
-    return Object.values(obj).map((node: any) => ({
-      path: node.path,
-      name: node.name,
-      children: node.children ? convertToArray(node.children) : undefined
-    }));
+    return Object.values(obj)
+      .map((node: any) => ({
+        path: node.path,
+        name: node.name,
+        children: node.children ? convertToArray(node.children) : undefined
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   };
 
   return convertToArray(root);
@@ -75,7 +77,7 @@ const TreeNode: React.FC<{
   currentPage: string;
   onSelect: (path: string) => void;
 }> = ({ node, level, currentPage, onSelect }) => {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
   const isFolder = node.children && node.children.length > 0;
   const isActive = node.path === currentPage;
   const isFile = !isFolder;
