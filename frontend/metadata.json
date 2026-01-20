@@ -1,0 +1,5 @@
+{
+  "name": "CodeWiki AI",
+  "description": "一个交互式的、由 AI 驱动的 WIKI，用于可视化代码仓库分析，展示架构图、API 文档和流程分析。",
+  "requestFramePermissions": []
+}

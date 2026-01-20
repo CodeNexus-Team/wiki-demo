@@ -1,0 +1,4 @@
+# Cache directory - ignore all cached files
+*
+!.gitignore
+!README.md
