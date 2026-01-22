@@ -120,6 +120,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
               onNodeClick={handleMermaidNodeClick}
               highlightedNodeId={highlightedMermaidNodeId}
               onDoubleClick={() => onMermaidDoubleClick?.(content, block.metadata)}
+              status={block.status}
           />
         );
 

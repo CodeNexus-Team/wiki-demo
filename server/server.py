@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
 import sys
+import json
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # 导入后端 mock 函数（待替换为实际实现）
 from backend_mock import (
     execute_workflow_mock,
-    fetch_page_mock,
     detailed_query_mock,
     expand_query_mock
 )
@@ -112,6 +112,129 @@ class CreatePageResponse(BaseModel):
     new_page: FetchPageResponse = Field(..., description="新页面内容")
 
 
+class ApplyChangesRequest(BaseModel):
+    """应用变更请求模型"""
+    page_path: str = Field(..., description="当前页面路径")
+    page_diff: PageDiffResponse = Field(..., description="要应用的变更")
+
+
+# ==================== 文件操作函数（真实实现） ====================
+
+def fetch_page(page_path: str, wiki_root: str) -> Dict[str, Any]:
+    """
+    获取 Wiki 页面内容
+
+    Args:
+        page_path: 页面路径
+        wiki_root: wiki 根目录
+
+    Returns:
+        包含 content 和 source 的字典
+    """
+    # 去掉前导斜杠，避免 os.path.join 将其视为绝对路径
+    page_path = page_path.lstrip('/')
+
+    # 构建完整路径
+    if os.path.isabs(wiki_root):
+        json_path = os.path.join(wiki_root, page_path)
+    else:
+        json_path = os.path.join(os.path.dirname(__file__), wiki_root, page_path)
+
+    print(f"Fetching page from: {json_path}")
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    return {
+        "content": data['markdown_content'],
+        "source": data['source_id'],
+    }
+
+
+def apply_changes(page_path: str, page_diff: Dict[str, Any], wiki_root: str) -> Dict[str, Any]:
+    """
+    应用变更到页面文件
+
+    Args:
+        page_path: 页面路径
+        page_diff: 变更内容，包含 insert_blocks, delete_blocks, insert_sources, delete_sources
+        wiki_root: wiki 根目录
+
+    Returns:
+        操作结果
+    """
+    # 读取当前页面内容
+    page_path_clean = page_path.lstrip('/')
+    if os.path.isabs(wiki_root):
+        json_path = os.path.join(wiki_root, page_path_clean)
+    else:
+        json_path = os.path.join(os.path.dirname(__file__), wiki_root, page_path_clean)
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        page_data = json.load(f)
+
+    blocks = page_data.get('markdown_content', [])
+
+    # 1. 删除 delete_blocks 中的块
+    delete_ids = set(page_diff.get("delete_blocks", []))
+
+    def remove_blocks(block_list: list, ids_to_remove: set) -> list:
+        result = []
+        for block in block_list:
+            if block.get("id") not in ids_to_remove:
+                if "content" in block and isinstance(block["content"], list):
+                    block["content"] = remove_blocks(block["content"], ids_to_remove)
+                result.append(block)
+        return result
+
+    blocks = remove_blocks(blocks, delete_ids)
+
+    # 2. 插入 insert_blocks
+    # 与前端逻辑一致：
+    # - 如果目标块是 section 类型：新块作为第一个子节点插入
+    # - 如果目标块是非 section 类型：新块作为下一个兄弟节点插入
+    def insert_after_block(block_list: list, after_id: str, new_block: dict) -> bool:
+        for i, block in enumerate(block_list):
+            if block.get("id") == after_id:
+                if block.get("type") == "section":
+                    # section 类型：插入为第一个子节点
+                    if "content" not in block or not isinstance(block["content"], list):
+                        block["content"] = []
+                    block["content"].insert(0, new_block)
+                else:
+                    # 非 section 类型：插入为兄弟节点
+                    block_list.insert(i + 1, new_block)
+                return True
+            if "content" in block and isinstance(block["content"], list):
+                if insert_after_block(block["content"], after_id, new_block):
+                    return True
+        return False
+
+    for insert_item in page_diff.get("insert_blocks", []):
+        after_id = insert_item["after_block"]
+        new_block = insert_item["block"]
+        insert_after_block(blocks, after_id, new_block)
+
+    # 3. 更新 sources
+    sources = page_data.get("source_id", [])
+    delete_source_ids = set(page_diff.get("delete_sources", []))
+    sources = [s for s in sources if s.get("source_id") not in delete_source_ids]
+    sources.extend(page_diff.get("insert_sources", []))
+
+    # 4. 保存修改后的文件
+    page_data["markdown_content"] = blocks
+    page_data["source_id"] = sources
+
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(page_data, f, ensure_ascii=False, indent=2)
+
+    print(f"Applied changes to: {json_path}")
+    return {
+        "success": True,
+        "message": f"变更已应用到 {page_path}",
+        "updated_path": json_path
+    }
+
+
 # ==================== API 路由 ====================
 
 @app.post("/api/user_query")
@@ -153,14 +276,14 @@ async def user_query(
 
 
 @app.post("/api/fetch_page", response_model=FetchPageResponse)
-async def fetch_page(request: FetchPageRequest) -> FetchPageResponse:
+async def fetch_page_api(request: FetchPageRequest) -> FetchPageResponse:
     """
     获取 Wiki 页面内容
 
     根据页面路径读取对应的 JSON 文件并返回页面内容。
     """
     try:
-        page_data = fetch_page_mock(
+        page_data = fetch_page(
             request.page_path,
             wiki_root=os.environ.get("WIKI_ROOT_PATH", "")
         )
@@ -184,13 +307,40 @@ async def detailed_query(
     - CreatePageResponse：新增页面并返回页面内容
     """
     try:
-        result = detailed_query_mock(request.page_path, request.block_ids, request.user_query)
+        print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, user_query={request.user_query}")
+        result = detailed_query_mock(
+            request.page_path,
+            request.block_ids,
+            request.user_query,
+            wiki_root=os.environ.get("WIKI_ROOT_PATH", "")
+        )
+        print(f"详细查询结果: {result}")
         if "new_page_path" in result:
             return CreatePageResponse(**result)
         else:
             return PageDiffResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"详细查询失败: {str(e)}")
+
+
+@app.post("/api/apply_changes")
+async def apply_changes_api(request: ApplyChangesRequest) -> Dict[str, Any]:
+    """
+    应用变更接口
+
+    用户确认变更后，将 page_diff 应用到对应的页面文件。
+    """
+    try:
+        print(f"收到应用变更请求: page_path={request.page_path}")
+        result = apply_changes(
+            request.page_path,
+            request.page_diff.model_dump(),
+            wiki_root=os.environ.get("WIKI_ROOT_PATH", "")
+        )
+        print(f"应用变更结果: {result}")
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"应用变更失败: {str(e)}")
 
 
 # ==================== 启动入口 ====================

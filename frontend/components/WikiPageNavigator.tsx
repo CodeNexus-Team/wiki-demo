@@ -184,7 +184,7 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
   const headings = extractHeadings(blocks);
 
   return (
-    <div className="bg-white rounded-2xl shadow-apple-card border border-white p-4 resize overflow-auto" style={{ width: 256, minWidth: 200, minHeight: 200 }}>
+    <div className="bg-white rounded-2xl shadow-apple-card border border-white p-4 resize overflow-auto" style={{ width: 'fit-content', minWidth: 200, maxWidth: 400, minHeight: 200 }}>
       <div className="mb-3 pb-3 border-b border-gray-100">
         <div className="flex items-center justify-between">
           {/* Tab 切换 */}

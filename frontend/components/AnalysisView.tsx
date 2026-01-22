@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { AnalysisType, WikiBlock, BlockOperation, ChatMessage, MermaidMetadata, SourceLocation, ExpandedQuestion, WikiHistoryRecord } from '../types';
+import { AnalysisType, WikiBlock, BlockOperation, ChatMessage, MermaidMetadata, SourceLocation, ExpandedQuestion, WikiHistoryRecord, ModifyPageResponse } from '../types';
 import { geminiService, AVAILABLE_MODELS } from '../services/geminiService';
 import { codenexusWikiService } from '../services/codenexusWikiService';
 import { wikiPageCache } from '../services/wikiPageCache';
 import { parseMarkdownToBlocks, parseSingleBlockUpdate } from '../utils/markdownParser';
 import { parseWikiPageToBlocks } from '../utils/wikiContentParser';
 import { toggleBlockCollapse, markBlockAsDeleted, insertBlockAfter, updateBlockContent } from '../utils/blockOperations';
-import { findBlockById, collectBlocksByIds, removeDeletedBlocks, clearBlockStatuses } from '../utils/treeBuilder';
+import { findBlockById, collectBlocksByIds, removeDeletedBlocks, clearBlockStatuses, countTreeNodes } from '../utils/treeBuilder';
 import WikiBlockRenderer from './WikiBlock';
 import SourceCodePanel from './SourceCodePanel';
 import QuestionSelector from './QuestionSelector';
@@ -94,6 +94,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   // Diff System State
   const [originalBlocks, setOriginalBlocks] = useState<WikiBlock[]>([]);
   const [isDiffMode, setIsDiffMode] = useState(false);
+  const [pendingPageDiff, setPendingPageDiff] = useState<ModifyPageResponse | null>(null);
 
   // Chat & History State
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
@@ -529,7 +530,25 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     }
   };
 
-  const handleApplyChanges = () => {
+  const handleApplyChanges = async () => {
+    // 如果有 pending page diff，调用后端 API 应用变更
+    if (pendingPageDiff && currentPagePath) {
+      try {
+        console.log('[AnalysisView] 调用后端 API 应用变更:', currentPagePath);
+        const result = await codenexusWikiService.applyChanges(currentPagePath, pendingPageDiff);
+        console.log('[AnalysisView] 应用变更结果:', result);
+      } catch (error) {
+        console.error('[AnalysisView] 应用变更失败:', error);
+        setChatHistory(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: `❌ 应用变更失败: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: Date.now()
+        }]);
+        return;
+      }
+    }
+
     // 递归删除所有标记为 deleted 的节点，然后清除所有状态标记
     const blocksWithoutDeleted = removeDeletedBlocks(blocks);
     const appliedBlocks = clearBlockStatuses(blocksWithoutDeleted);
@@ -537,6 +556,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setBlocks(appliedBlocks);
     setOriginalBlocks([]);
     setIsDiffMode(false);
+    setPendingPageDiff(null);
 
     // ✅ 更新缓存：清除当前页面的缓存，下次访问时会重新从后端获取最新内容
     if (currentPagePath) {
@@ -556,6 +576,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setBlocks(originalBlocks);
     setOriginalBlocks([]);
     setIsDiffMode(false);
+    setPendingPageDiff(null);
 
     setChatHistory(prev => [...prev, {
         id: Date.now().toString(),
@@ -844,6 +865,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
             setBlocks(newBlocks);
             setIsDiffMode(true);
+            // 保存 page_diff 供后续应用变更时使用
+            setPendingPageDiff(response);
 
             const insertCount = response.insert_blocks.length;
             const deleteCount = response.delete_blocks.length;
@@ -1202,7 +1225,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                             </span>
                         )}
                      </div>
-                     <span className="text-xs text-[#d2d2d7] font-mono">{blocks.length} 个对象</span>
+                     <span className="text-xs text-[#d2d2d7] font-mono">{countTreeNodes(blocks)} 个对象</span>
                   </div>
                   
                   {/* Wiki Content */}

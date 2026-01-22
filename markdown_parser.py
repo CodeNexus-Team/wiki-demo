@@ -362,11 +362,11 @@ class MarkdownToJsonParser:
 
                     if code_block_lang == "mermaid":
                         # 生成 Chart 节点
-                        # 如果提供了 mapping，直接使用；否则提取节点
-                        if mapping:
-                            chart_mapping = mapping
-                        else:
+                        # 使用提供的 mapping（即使为空），只有 mapping 为 None 时才自动提取
+                        if mapping is None:
                             chart_mapping, _ = self._extract_mermaid_nodes(code_content_str)
+                        else:
+                            chart_mapping = mapping
 
                         chart_node = {
                             "type": "chart",
@@ -519,10 +519,11 @@ class MarkdownToJsonParser:
                     code_content_str = "\n".join(code_block_content)
 
                     if code_block_lang == "mermaid":
-                        if mapping:
-                            chart_mapping = mapping
-                        else:
+                        # 使用提供的 mapping（即使为空），只有 mapping 为 None 时才自动提取
+                        if mapping is None:
                             chart_mapping, _ = self._extract_mermaid_nodes(code_content_str)
+                        else:
+                            chart_mapping = mapping
 
                         chart_node = {
                             "type": "chart",
@@ -694,8 +695,10 @@ class MarkdownToJsonParser:
             source_registry = [
                 {
                     "source_id": "1",
-                    "name": "example/Demo.java",
-                    "lines": ["10-20"]
+                    "name": "mall/mall-portal/src/main/java/com/macro/mall/portal/controller/AlipayController.java",
+                    "lines": [
+                        "32-74"
+                    ]   
                 }
             ]
 

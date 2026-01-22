@@ -283,6 +283,54 @@ class CodeNexusWikiService {
   }
 
   /**
+   * 应用变更：将 page_diff 应用到后端文件
+   * @param pagePath 当前页面路径
+   * @param pageDiff 要应用的变更
+   * @returns 操作结果
+   */
+  async applyChanges(
+    pagePath: string,
+    pageDiff: ModifyPageResponse
+  ): Promise<{ success: boolean; message: string }> {
+    const request = {
+      page_path: pagePath,
+      page_diff: pageDiff
+    };
+
+    console.log('[CodeNexus Service] 调用 applyChanges API:', {
+      url: `${this.baseUrl}/api/apply_changes`,
+      request
+    });
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/apply_changes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request)
+      });
+
+      console.log('[CodeNexus Service] applyChanges API 响应状态:', response.status, response.statusText);
+
+      if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log('[CodeNexus Service] applyChanges API 响应数据:', data);
+
+      // 清除缓存，下次访问时重新获取
+      wikiPageCache.remove(pagePath);
+
+      return data;
+    } catch (error) {
+      console.error('应用变更失败:', error);
+      throw new Error(`应用变更失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * 测试 API 连接
    */
   async testConnection(): Promise<boolean> {

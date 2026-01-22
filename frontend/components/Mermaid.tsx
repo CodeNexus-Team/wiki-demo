@@ -179,9 +179,10 @@ interface MermaidProps {
   onNodeClick?: (nodeId: string, metadata?: MermaidMetadata) => void;
   highlightedNodeId?: string | null;
   onDoubleClick?: () => void;
+  status?: 'inserted' | 'deleted' | 'modified' | 'original';
 }
 
-const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlightedNodeId, onDoubleClick }) => {
+const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlightedNodeId, onDoubleClick, status }) => {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ type: string; message: string } | null>(null);
@@ -378,15 +379,47 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
     );
   }
 
+  // 根据状态获取容器样式
+  const getStatusStyles = () => {
+    switch (status) {
+      case 'deleted':
+        return 'opacity-40 border-2 border-red-400 bg-red-50';
+      case 'inserted':
+        return 'border-2 border-emerald-400 bg-emerald-50/50';
+      case 'modified':
+        return 'border-2 border-amber-400 bg-amber-50/50';
+      default:
+        return 'border border-[#00000008] bg-white';
+    }
+  };
+
   return (
     <>
-        <div
-            ref={containerRef}
-            className="mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 bg-white rounded-xl border border-[#00000008] shadow-sm cursor-default"
-            dangerouslySetInnerHTML={{ __html: getHighlightedSvg() }}
-            onClick={() => setMenuPosition(null)}
-            onDoubleClick={onDoubleClick}
-        />
+        <div className="relative">
+          {/* 删除状态覆盖层 */}
+          {status === 'deleted' && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none rounded-xl overflow-hidden">
+              {/* 红色半透明背景 */}
+              <div className="absolute inset-0 bg-red-200/40" />
+              {/* 对角线删除效果 */}
+              <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+                <line x1="0" y1="0" x2="100%" y2="100%" stroke="#ef4444" strokeWidth="3" strokeOpacity="0.6" />
+                <line x1="100%" y1="0" x2="0" y2="100%" stroke="#ef4444" strokeWidth="3" strokeOpacity="0.6" />
+              </svg>
+              {/* 删除标签 */}
+              <div className="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded shadow">
+                删除
+              </div>
+            </div>
+          )}
+          <div
+              ref={containerRef}
+              className={`mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 rounded-xl shadow-sm cursor-default ${getStatusStyles()}`}
+              dangerouslySetInnerHTML={{ __html: getHighlightedSvg() }}
+              onClick={() => setMenuPosition(null)}
+              onDoubleClick={onDoubleClick}
+          />
+        </div>
 
         {/* Context Menu - Rendered via Portal to avoid transform scaling */}
         {menuPosition && activeNodeId && createPortal(

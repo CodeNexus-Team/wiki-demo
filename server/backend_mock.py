@@ -65,93 +65,99 @@ def execute_workflow_mock(user_query: str, selected_questions: List[Dict], wiki_
         "wiki_pages": wiki_pages,
     }
 
-def fetch_page_mock(page_path: str, wiki_root: str = "user_data/wiki_demo/") -> Dict:
+def detailed_query_mock(page_path: str, block_ids: List[str], user_query: str, wiki_root: str = "user_data/wiki_demo/") -> Dict:
     import json
     import os
 
-    # 去掉前导斜杠，避免 os.path.join 将其视为绝对路径
-    page_path = page_path.lstrip('/')
-
-    # 构建完整路径
-    # 如果 wiki_root 是绝对路径，直接使用；否则相对于当前文件目录
+    # 读取当前页面内容
+    page_path_clean = page_path.lstrip('/')
     if os.path.isabs(wiki_root):
-        json_path = os.path.join(wiki_root, page_path)
+        json_path = os.path.join(wiki_root, page_path_clean)
     else:
-        json_path = os.path.join(os.path.dirname(__file__), wiki_root, page_path)
+        json_path = os.path.join(os.path.dirname(__file__), wiki_root, page_path_clean)
 
-    print(f"Fetching page from: {json_path}")
     with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        page_data = json.load(f)
 
-    page_content = data['markdown_content']
-    page_source = data['source_id']
+    blocks = page_data.get('markdown_content', [])
 
-    return {
-        "content": page_content,
-        "source": page_source,
-    }
+    # insert_block: 删除第二个块，插入到第一个块之后
+    page_diff = None
+    if len(blocks) >= 2:
+        first_block = blocks[0]
+        second_block = blocks[1]
+        first_block_id = first_block.get('id', 'block_0')
+        second_block_id = second_block.get('id', 'block_1')
 
-def detailed_query_mock(page_path: str, block_ids: List[str], user_query: str) -> Dict:
-    # will implement this later
-    page_diff = {
-        "insert_blocks": [
-            {
-                "after_block": "S1",
-                "block": {
-                    "type": "section",
-                    "id": "13",
-                    "title": "新增块的标题",
-                    "content": []             
+        page_diff = {
+            "insert_blocks": [
+                {
+                    "after_block": first_block_id,
+                    "block": {
+                        "type": "section",
+                        "id": second_block_id,
+                        "title": "插入的块标题",
+                        "content": [
+                                {
+                                    "type": "text",
+                                    "id": "S114514",
+                                    "content": {
+                                        "markdown": "yuanshenniubi"
+                                    },
+                                    "source_id": []
+                            }
+                        ]
+                    }
                 }
-            }
-        ],
-        "delete_blocks": [
-            "S2"
-        ],
-        "insert_sources": [
-            {
-                "source_id": "4322",
-                "name": "new_source.java",
-                "lines": [
-                    "12-34"
-                ]
-            }
-        ],
-        "delete_sources": [
-            "566"
-        ]
-    }
+            ],
+            "delete_blocks": [
+                second_block_id
+            ],
+            "insert_sources": [
+                {
+                    "source_id": "4322",
+                    "name": "new_source.java",
+                    "lines": [
+                        "12-34"
+                    ]
+                }
+            ],
+            "delete_sources": [
+                "566"
+            ]
+        }
 
+    # create_page: 在根目录下创建新文件
     create_page = {
-        "new_page_path": "/path/to/new/page.json",
+        "new_page_path": "/new_page_from_query.json",
         "new_page": {
             "content": [
                 {
-                    "type":"section",
-                    "id":"4238",
-                    "title":"新增页面标题",
-                    "content":[
+                    "type": "section",
+                    "id": "4238",
+                    "title": "新增页面标题",
+                    "content": [
                         {
-                            "type":"text",
-                            "id":"4327",
-                            "content":{
-                                "markdown":"新增页面内容123"
+                            "type": "text",
+                            "id": "4327",
+                            "content": {
+                                "markdown": "新增页面内容123"
                             },
-                            "source_id":["643142"]
+                            "source_id": ["643142"]
                         },
                         {
-                            "type":"section",
-                            "id":"278",
-                            "title":"1.1 新增标题",
-                            "content":[]             
+                            "type": "section",
+                            "id": "278",
+                            "title": "1.1 新增标题",
+                            "content": []
                         }
                     ]
                 }
             ],
             "source": [
                 {
-                    "source_id":"643142",
-                    "name":"new_reference.py",
+                    "source_id": "643142",
+                    "name": "new_reference.py",
                     "lines": [
                         "123-127",
                     ]
@@ -160,8 +166,28 @@ def detailed_query_mock(page_path: str, block_ids: List[str], user_query: str) -
         }
     }
 
-    # 可能返回这两种格式的数据
-    if(len(user_query) % 2 == 0):
+    # 根据 user_query 长度决定返回哪种格式
+    if len(user_query) % 2 == 0 and page_diff:
+        print("Returning page diff (preview only, not applying changes).")
+        # 只返回 diff 数据供前端预览，不修改文件
+        # 文件的实际修改由前端确认后通过 apply_changes API 执行
         return page_diff
     else:
+        # 创建新的 JSON 文件
+        new_page_path = create_page["new_page_path"].lstrip('/')
+        if os.path.isabs(wiki_root):
+            new_json_path = os.path.join(wiki_root, new_page_path)
+        else:
+            new_json_path = os.path.join(os.path.dirname(__file__), wiki_root, new_page_path)
+
+        # 构建文件内容（与现有页面格式一致）
+        new_file_content = {
+            "markdown_content": create_page["new_page"]["content"],
+            "source_id": create_page["new_page"]["source"]
+        }
+
+        with open(new_json_path, 'w', encoding='utf-8') as f:
+            json.dump(new_file_content, f, ensure_ascii=False, indent=2)
+
+        print(f"Created new page at: {new_json_path}")
         return create_page
