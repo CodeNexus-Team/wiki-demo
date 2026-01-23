@@ -400,12 +400,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
           {status === 'deleted' && (
             <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none rounded-xl overflow-hidden">
               {/* 红色半透明背景 */}
-              <div className="absolute inset-0 bg-red-200/40" />
-              {/* 对角线删除效果 */}
-              <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
-                <line x1="0" y1="0" x2="100%" y2="100%" stroke="#ef4444" strokeWidth="3" strokeOpacity="0.6" />
-                <line x1="100%" y1="0" x2="0" y2="100%" stroke="#ef4444" strokeWidth="3" strokeOpacity="0.6" />
-              </svg>
+              <div className="absolute inset-0 bg-red-100/60" />
               {/* 删除标签 */}
               <div className="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded shadow">
                 删除

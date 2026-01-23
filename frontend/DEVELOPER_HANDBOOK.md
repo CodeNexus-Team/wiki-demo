@@ -2,8 +2,8 @@
 
 > 智能代码分析与可视化 WIKI 系统 - 完整开发指南
 
-**版本**: v1.9
-**最后更新**: 2026-01-14
+**版本**: v2.0
+**最后更新**: 2026-01-22
 
 ---
 
@@ -302,6 +302,15 @@ POST { page_path: "...", block_ids: [...], user_query: "..." }
 → ModifyPageResponse | NewPageResponse
 ```
 
+#### 4. 应用变更 `/api/apply_changes`
+
+```typescript
+POST { page_path: "...", page_diff: ModifyPageResponse }
+→ { success: boolean, message: string, updated_path: string }
+```
+
+**说明**：用户确认变更后调用此接口，将 `page_diff` 应用到对应的页面文件。详细查询接口只返回预览数据，不会修改文件。
+
 ### 响应类型
 
 ```typescript
@@ -318,6 +327,169 @@ interface NewPageResponse {
   new_page_path: string;
   new_page: WikiPage;
 }
+```
+
+### 后端函数分类
+
+后端函数分为两类：
+
+| 函数 | 位置 | 类型 | 说明 |
+|------|------|------|------|
+| `expand_query_mock` | backend_mock.py | Mock | 待接入 AI 工作流 |
+| `execute_workflow_mock` | backend_mock.py | Mock | 待接入 AI 工作流 |
+| `detailed_query_mock` | backend_mock.py | Mock | 待接入 AI 工作流 |
+| `fetch_page` | server.py | **真实实现** | 纯文件读取操作 |
+| `apply_changes` | server.py | **真实实现** | 纯文件修改操作 |
+
+`fetch_page` 和 `apply_changes` 是真实的文件操作逻辑，不依赖 AI。即使将来接入实际的 AI 工作流，这两个函数的逻辑也保持不变。
+
+---
+
+## 变更预览与应用工作流
+
+### 概述
+
+用户修改 Wiki 内容时，系统采用"预览→确认→应用"的工作流，确保用户在确认前可以预览变更效果，且不会意外修改文件。
+
+### 工作流程
+
+```
+用户选择块 + 输入指令
+        ↓
+调用 /api/detailed_query
+        ↓
+后端返回 page_diff（预览数据，不修改文件）
+        ↓
+前端显示 Diff 预览（新增绿色、删除红色）
+        ↓
+    ┌───────┴───────┐
+    ↓               ↓
+用户点击"应用"   用户点击"放弃"
+    ↓               ↓
+调用 /api/apply_changes   恢复原始内容
+    ↓               ↓
+后端修改文件      清除 pendingPageDiff
+    ↓
+刷新页面显示
+```
+
+### 前端状态管理
+
+```typescript
+// components/AnalysisView.tsx
+const [pendingPageDiff, setPendingPageDiff] = useState<ModifyPageResponse | null>(null);
+
+// 收到预览数据时保存
+const handleDetailedQueryResponse = (response: ModifyPageResponse) => {
+  setPendingPageDiff(response);
+  // 应用 Diff 到 UI 预览...
+};
+
+// 用户确认应用变更
+const handleApplyChanges = async () => {
+  if (pendingPageDiff && currentPagePath) {
+    await codenexusWikiService.applyChanges(currentPagePath, pendingPageDiff);
+  }
+  setPendingPageDiff(null);
+  // 刷新页面...
+};
+
+// 用户放弃变更
+const handleDiscardChanges = () => {
+  setPendingPageDiff(null);
+  // 恢复原始内容...
+};
+```
+
+### 块插入逻辑
+
+前后端保持一致的插入逻辑：
+
+```typescript
+// 插入块到指定位置
+function insertAfterBlock(blockList, afterId, newBlock) {
+  for (const block of blockList) {
+    if (block.id === afterId) {
+      if (block.type === "section") {
+        // section 类型：新块作为第一个子节点插入
+        block.content.unshift(newBlock);
+      } else {
+        // 非 section 类型：新块作为下一个兄弟节点插入
+        const index = blockList.indexOf(block);
+        blockList.splice(index + 1, 0, newBlock);
+      }
+      return true;
+    }
+    // 递归搜索子节点...
+  }
+  return false;
+}
+```
+
+**规则说明**：
+- `section` 类型块：新块插入为其第一个子节点（内容层级）
+- 其他类型块（text、mermaid 等）：新块插入为其下一个兄弟节点（同层级）
+
+---
+
+## Mermaid 图表状态显示
+
+### 概述
+
+Mermaid 图表支持显示不同的状态（删除、新增、修改），在 Diff 预览时提供清晰的视觉反馈。
+
+### 状态类型
+
+```typescript
+// components/Mermaid.tsx
+interface MermaidProps {
+  status?: 'deleted' | 'inserted' | 'modified';
+  // ...
+}
+```
+
+### 删除状态样式
+
+删除状态的 Mermaid 图表显示以下视觉效果：
+- 降低透明度（opacity: 40%）
+- 红色边框（2px solid red）
+- X 形交叉线覆盖
+- "删除" 标签（右上角红色背景）
+
+```tsx
+// components/Mermaid.tsx
+{status === 'deleted' && (
+  <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-lg">
+    {/* 红色半透明背景 */}
+    <div className="absolute inset-0 bg-red-200/40" />
+
+    {/* X 形交叉线 */}
+    <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+      <line x1="0" y1="0" x2="100%" y2="100%" stroke="#ef4444" strokeWidth="2" />
+      <line x1="100%" y1="0" x2="0" y2="100%" stroke="#ef4444" strokeWidth="2" />
+    </svg>
+
+    {/* 删除标签 */}
+    <div className="absolute top-2 right-2 bg-red-500 text-white text-xs px-2 py-1 rounded">
+      删除
+    </div>
+  </div>
+)}
+```
+
+### WikiBlock 传递状态
+
+```tsx
+// components/WikiBlock.tsx
+case 'mermaid':
+  return (
+    <Mermaid
+      chart={content}
+      metadata={block.metadata}
+      status={block.status}  // 传递状态到 Mermaid 组件
+      // ...
+    />
+  );
 ```
 
 ---
@@ -1351,6 +1523,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"], allo
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v2.0 | 2026-01-22 | 变更预览工作流重构：预览与应用分离、添加 `/api/apply_changes` 接口、`pendingPageDiff` 状态管理、Mermaid 删除状态视觉效果（X 线+标签）、前后端块插入逻辑统一（section→子节点，其他→兄弟节点）、后端函数重构（fetch_page/apply_changes 移至 server.py 作为真实实现） |
 | v1.9 | 2026-01-14 | Wiki 生成历史管理：侧边栏入口、全局历史面板（z-index 60/70）、自动保存（最多 50 条）、快速恢复、时间格式化、修复仪表盘无法显示历史和层级冲突问题 |
 | v1.8 | 2026-01-12 | Mermaid 交互优化：修复图表类型检测 bug（大小写匹配）、实现类型感知的节点 ID 提取策略、支持 flowchart/classDiagram/sequenceDiagram/stateDiagram 四种图表类型的精确交互 |
 | v1.7 | 2026-01-06 | 源码面板优化：自动扫描目录（Vite 插件）、文件树左侧布局、可调整宽度（200px 初始）、智能目录展开、代码范围高亮（支持 "10-20" 格式）、Mermaid 节点智能交互过滤 |
@@ -1364,4 +1537,4 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"], allo
 
 ---
 
-**维护者**:中国人民大学 信息学院 CDSLab 孙煜
+**维护者**:中国人民大学 信息学院 智能计算与数据系统研究所 孙煜

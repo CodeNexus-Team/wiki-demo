@@ -1,6 +1,24 @@
 import { WikiBlock, BlockType } from '../types';
 
 /**
+ * 递归设置 block 及其所有子节点的 status
+ *
+ * @param block 要设置的块
+ * @param status 状态值
+ * @returns 设置了状态的新块
+ */
+export function setStatusRecursively(
+  block: WikiBlock,
+  status: WikiBlock['status']
+): WikiBlock {
+  return {
+    ...block,
+    status,
+    children: block.children?.map(child => setStatusRecursively(child, status))
+  };
+}
+
+/**
  * 在树形结构中插入block
  *
  * 插入规则：
@@ -153,6 +171,7 @@ export function toggleBlockCollapse(
 
 /**
  * 标记块为删除状态（用于 Diff 系统）
+ * 会递归标记所有子节点
  *
  * @param blocks 树形结构的 WikiBlock 数组
  * @param targetId 要标记的块ID
@@ -164,10 +183,8 @@ export function markBlockAsDeleted(
 ): WikiBlock[] {
   return blocks.map(block => {
     if (block.id === targetId) {
-      return {
-        ...block,
-        status: 'deleted' as const
-      };
+      // 递归标记当前块及其所有子节点为 deleted
+      return setStatusRecursively(block, 'deleted');
     }
 
     if (block.children && block.children.length > 0) {

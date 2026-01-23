@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AnalysisType, WikiBlock, ChatMessage, MermaidMetadata, SourceLocation, ExpandedQuestion, ModifyPageResponse, NewPageResponse, WikiPageContent } from '../types';
 import { codenexusWikiService } from '../services/codenexusWikiService';
 import { wikiPageCache } from '../services/wikiPageCache';
-import { toggleBlockCollapse, markBlockAsDeleted, insertBlockAfter } from '../utils/blockOperations';
+import { toggleBlockCollapse, markBlockAsDeleted, insertBlockAfter, setStatusRecursively } from '../utils/blockOperations';
 import { collectBlocksByIds, removeDeletedBlocks, clearBlockStatuses } from '../utils/treeBuilder';
 import WikiBlockRenderer from './WikiBlock';
 import SourceCodePanel from './SourceCodePanel';
@@ -274,10 +274,8 @@ const CodeNexusAnalysisView: React.FC<CodeNexusAnalysisViewProps> = ({ type }) =
       const parsedBlocks = parseWikiPageToBlocks(tempPage.content, tempPage.source);
 
       if (parsedBlocks.length > 0) {
-        const newBlock: WikiBlock = {
-          ...parsedBlocks[0],
-          status: 'inserted'
-        };
+        // 递归设置新块及其所有子节点的 status 为 inserted
+        const newBlock = setStatusRecursively(parsedBlocks[0], 'inserted');
         // 使用树形结构的插入函数
         newBlocks = insertBlockAfter(newBlocks, insertion.after_block, newBlock);
       }
