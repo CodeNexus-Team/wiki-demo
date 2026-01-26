@@ -80,8 +80,8 @@ CodeNexus.AI 是一个基于 AI 的代码分析和文档生成工具，支持双
 ```
 codewiki-ai/
 ├── components/                    # React 组件
-│   ├── AnalysisView.tsx          # 核心视图：聊天、Wiki 渲染、状态管理
-│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图
+│   ├── AnalysisView.tsx          # 核心视图：聊天、Wiki 渲染、状态管理（784行）
+│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图（413行）
 │   ├── Dashboard.tsx             # 仪表盘：统计图表
 │   ├── Sidebar.tsx               # 侧边栏导航（含历史记录入口）
 │   ├── WikiBlock.tsx             # 原子块渲染器（支持递归、折叠、三点菜单、高亮）
@@ -89,7 +89,33 @@ codewiki-ai/
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板（侧边栏滑入）
 │   ├── Mermaid.tsx               # Mermaid 图表封装（支持节点高亮）
 │   ├── SourceCodePanel.tsx       # 源代码阅读器（可调整宽度、联动高亮）
-│   └── QuestionSelector.tsx      # CodeNexus 问题选择器（可调整大小）
+│   ├── QuestionSelector.tsx      # CodeNexus 问题选择器（可调整大小）
+│   │
+│   ├── chat/                     # 聊天相关组件（v2.1 重构）
+│   │   ├── ChatPanel.tsx         # 聊天面板容器
+│   │   ├── ChatMessage.tsx       # 单条消息组件
+│   │   ├── ThinkingChain.tsx     # 思考链组件
+│   │   ├── SelectionBar.tsx      # 选中块指示栏
+│   │   ├── DiffConfirmBar.tsx    # Diff 确认栏
+│   │   └── index.ts
+│   │
+│   ├── wiki/                     # Wiki 内容组件（v2.1 重构）
+│   │   ├── WikiContent.tsx       # Wiki 内容区域
+│   │   └── index.ts
+│   │
+│   └── mermaid/                  # Mermaid 组件（v2.1 重构）
+│       ├── MermaidModal.tsx      # Mermaid 模态框
+│       └── index.ts
+│
+├── hooks/                         # 自定义 Hooks（v2.1 重构）
+│   ├── useBlockSelection.ts      # 块选择管理
+│   ├── useDiffMode.ts            # Diff 模式管理
+│   ├── useChatHistory.ts         # 聊天历史管理
+│   ├── useSourcePanel.ts         # 源代码面板状态
+│   ├── useWikiPages.ts           # Wiki 页面导航
+│   ├── useMermaidModal.ts        # Mermaid 模态框（仅 AnalysisView）
+│   ├── useResizablePanel.ts      # 通用可调整大小面板
+│   └── index.ts
 │
 ├── services/
 │   ├── geminiService.ts          # Gemini AI 服务层
@@ -1519,10 +1545,250 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"], allo
 
 ---
 
+## 组件重构（v2.1）
+
+### 重构概述
+
+v2.1 版本对 `AnalysisView` 和 `CodeNexusAnalysisView` 两个核心组件进行了重构，将重复逻辑提取为可复用的 Hooks 和 UI 组件。
+
+#### 代码量变化
+
+| 文件 | 重构前 | 重构后 | 减少 |
+|-----|--------|--------|------|
+| AnalysisView.tsx | 1547 行 | 784 行 | 49% |
+| CodeNexusAnalysisView.tsx | 898 行 | 413 行 | 54% |
+| **总计** | 2445 行 | 1197 行 | **51%** |
+
+### 自定义 Hooks
+
+#### useBlockSelection
+
+管理块选择状态，支持 Diff 模式下禁用选择。
+
+```typescript
+interface UseBlockSelectionReturn {
+  selectedBlockIds: Set<string>;
+  toggleBlockSelection: (block: WikiBlock) => void;
+  toggleBlockSelectionById: (blockId: string) => void;
+  clearSelection: () => void;
+  setSelectedBlockIds: (ids: Set<string>) => void;
+  getReferencedBlocks: () => WikiBlock[];
+  hasSelection: boolean;
+}
+
+// 使用示例
+const { selectedBlockIds, toggleBlockSelection, clearSelection } = useBlockSelection({
+  blocks,
+  isDiffMode: false
+});
+```
+
+#### useDiffMode
+
+统一 Diff 模式的状态管理，封装 applyChanges/discardChanges 逻辑。
+
+```typescript
+interface UseDiffModeReturn {
+  isDiffMode: boolean;
+  setIsDiffMode: (value: boolean) => void;
+  enterDiffMode: (modifiedBlocks: WikiBlock[], response?: ModifyPageResponse) => void;
+  applyChanges: () => Promise<void>;
+  discardChanges: () => void;
+  applyModifyPageResponse: (response: ModifyPageResponse, currentBlocks: WikiBlock[]) => Promise<WikiBlock[]>;
+}
+
+// 使用示例
+const { isDiffMode, enterDiffMode, applyChanges, discardChanges } = useDiffMode({
+  blocks,
+  setBlocks,
+  currentPagePath,
+  clearSelection,
+  addChatMessage: (content) => addSimpleMessage('assistant', content)
+});
+```
+
+#### useChatHistory
+
+统一聊天消息的增删改逻辑，包含自动滚动功能。
+
+```typescript
+interface UseChatHistoryReturn {
+  chatHistory: ChatMessage[];
+  isChatExpanded: boolean;
+  chatScrollRef: React.RefObject<HTMLDivElement>;
+  addUserMessage: (content: string, references?: WikiBlock[]) => string;
+  addAssistantMessage: (initialSteps?: string[]) => string;
+  updateAssistantProgress: (id: string, step: string) => void;
+  finalizeAssistantMessage: (id: string, content: string) => void;
+  addSimpleMessage: (role: 'user' | 'assistant', content: string) => void;
+  setChatHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  setIsChatExpanded: (value: boolean) => void;
+  clearHistory: () => void;
+}
+```
+
+#### useSourcePanel
+
+统一源代码面板的状态和事件处理。
+
+```typescript
+interface UseSourcePanelReturn {
+  isSourcePanelOpen: boolean;
+  activeSourceLocation: SourceLocation | null;
+  sourcePanelWidth: number;
+  highlightedBlockId: string | null;
+  highlightedMermaidNodeId: string | null;
+  closeSourcePanel: () => void;
+  setSourcePanelWidth: (width: number) => void;
+  handleSourceClick: (blockId: string, sourceId: string, sources: WikiSource[]) => void;
+  handleMermaidNodeClick: (nodeId: string, metadata?: MermaidMetadata, blockId?: string) => void;
+  setHighlightedBlockId: (id: string | null) => void;
+}
+```
+
+#### useWikiPages
+
+统一页面切换逻辑。
+
+```typescript
+interface UseWikiPagesReturn {
+  wikiPages: string[];
+  currentPagePath: string;
+  isLoadingPage: boolean;
+  isNavigatorVisible: boolean;
+  setWikiPages: React.Dispatch<React.SetStateAction<string[]>>;
+  setCurrentPagePath: (path: string) => void;
+  setIsNavigatorVisible: (visible: boolean) => void;
+  handlePageSwitch: (pagePath: string) => Promise<WikiBlock[] | null>;
+}
+```
+
+#### useMermaidModal（仅 AnalysisView）
+
+Mermaid 模态框状态管理，包含拖拽和缩放逻辑。
+
+#### useResizablePanel
+
+通用可调整大小面板 Hook，用于聊天面板的 resize。
+
+### 共享 UI 组件
+
+#### ChatPanel
+
+完整的聊天面板容器，包含消息列表、输入区域，支持可选的 resize 功能。
+
+```tsx
+<ChatPanel
+  chatHistory={chatHistory}
+  isChatExpanded={isChatExpanded}
+  isLoading={isLoading}
+  hasContent={hasContent}
+  prompt={prompt}
+  onPromptChange={setPrompt}
+  onSubmit={handleAnalyze}
+  selectedBlockIds={selectedBlockIds}
+  blocks={blocks}
+  onToggleSelect={toggleBlockSelection}
+  onClearSelection={clearSelection}
+  isDiffMode={isDiffMode}
+  onApplyChanges={applyDiffChanges}
+  onDiscardChanges={discardDiffChanges}
+  onToggleExpand={() => setIsChatExpanded(!isChatExpanded)}
+  chatScrollRef={chatScrollRef}
+  variant="orange"
+  footerLeft={<ModelSelector />}
+>
+  {/* QuestionSelector 等自定义内容 */}
+</ChatPanel>
+```
+
+#### WikiContent
+
+Wiki 内容渲染区域，包含导航器、块列表、统一事件处理。
+
+```tsx
+<WikiContent
+  blocks={blocks}
+  selectedBlockIds={selectedBlockIds}
+  isDiffMode={isDiffMode}
+  isLoadingPage={isLoadingPage}
+  onToggleSelect={toggleBlockSelection}
+  onToggleCollapse={handleToggleCollapse}
+  onMermaidNodeClick={handleMermaidNodeClick}
+  onSourceClick={handleSourceClick}
+  wikiPages={wikiPages}
+  currentPagePath={currentPagePath}
+  isNavigatorVisible={isNavigatorVisible}
+  onPageSwitch={handlePageSwitch}
+  onToggleNavigator={() => setIsNavigatorVisible(!isNavigatorVisible)}
+  headerLabel="交互式代码Wiki"
+  headerIcon="sparkles"
+  variant="blue"
+/>
+```
+
+#### ChatMessage
+
+单条聊天消息渲染，支持 user/assistant 两种类型，包含 references 显示和 ThinkingChain。
+
+#### SelectionBar
+
+选中块指示栏，显示选中数量和清除按钮。支持 `chat` 和 `standalone` 两种变体。
+
+#### DiffConfirmBar
+
+Diff 模式确认栏，包含"应用"和"放弃"按钮。支持 `inline` 和 `floating` 两种变体。
+
+#### MermaidModal
+
+Mermaid 模态框 UI 组件，包含 resize handles 和内容拖拽。
+
+### 使用指南
+
+#### 在新组件中使用 Hooks
+
+```typescript
+import {
+  useBlockSelection,
+  useDiffMode,
+  useChatHistory,
+  useSourcePanel,
+  useWikiPages
+} from '../hooks';
+
+const MyComponent = () => {
+  const blockSelection = useBlockSelection({ blocks, isDiffMode: false });
+  const chat = useChatHistory();
+  const wikiPages = useWikiPages({ mainContentRef, onPageLoaded: setBlocks });
+  const diffMode = useDiffMode({ blocks, setBlocks, currentPagePath, clearSelection });
+  const sourcePanel = useSourcePanel();
+
+  // 使用解构的方法和状态...
+};
+```
+
+#### 组件组合模式
+
+```tsx
+// CodeNexusAnalysisView 的简化结构
+<div>
+  <SourceCodePanel {...sourcePanelProps} />
+
+  <WikiContent {...wikiContentProps} />
+
+  <ChatPanel {...chatPanelProps}>
+    {showQuestionSelector && <QuestionSelector {...props} />}
+  </ChatPanel>
+</div>
+```
+
+---
+
 ## 版本历史
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v2.1 | 2026-01-23 | 组件重构：提取 7 个自定义 Hooks（useBlockSelection、useDiffMode、useChatHistory、useSourcePanel、useWikiPages、useMermaidModal、useResizablePanel）、新建 chat/wiki/mermaid 组件目录、ChatPanel/WikiContent/MermaidModal 等共享组件、主视图代码量减少 51%（2445行→1197行） |
 | v2.0 | 2026-01-22 | 变更预览工作流重构：预览与应用分离、添加 `/api/apply_changes` 接口、`pendingPageDiff` 状态管理、Mermaid 删除状态视觉效果（X 线+标签）、前后端块插入逻辑统一（section→子节点，其他→兄弟节点）、后端函数重构（fetch_page/apply_changes 移至 server.py 作为真实实现） |
 | v1.9 | 2026-01-14 | Wiki 生成历史管理：侧边栏入口、全局历史面板（z-index 60/70）、自动保存（最多 50 条）、快速恢复、时间格式化、修复仪表盘无法显示历史和层级冲突问题 |
 | v1.8 | 2026-01-12 | Mermaid 交互优化：修复图表类型检测 bug（大小写匹配）、实现类型感知的节点 ID 提取策略、支持 flowchart/classDiagram/sequenceDiagram/stateDiagram 四种图表类型的精确交互 |

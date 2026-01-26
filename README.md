@@ -38,9 +38,9 @@ python start.py <wiki_root_path> [c]
 ### 参数说明
 
 - `<wiki_root_path>` (必需): Wiki 内容的根目录路径
-- `c` (可选): 如果提供此参数，会先将所有 Markdown/wiki结果的json 文件转换为 JSON 格式
+- `c` (可选): 如果提供此参数，会先将所有 Markdown/wiki结果形式的json 文件转换为前端可渲染的 JSON 格式
 
-**注意：如果wiki结果为json，请以.meta.json结尾**
+**注意：如果wiki结果为json，请以.meta.json结尾；为了减轻ai负担wiki结果的json和前端要求的json并不一样，所以需要转换，转换后的前端要求的json文件会位于<wiki_root_path>/wiki_result 中**
 
 ### 使用示例
 

@@ -35,14 +35,29 @@
 ```
 codewiki-ai/
 ├── components/
-│   ├── AnalysisView.tsx          # 核心视图
-│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图
+│   ├── AnalysisView.tsx          # 核心视图（784行）
+│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图（413行）
 │   ├── WikiBlock.tsx             # 原子块渲染器（递归+折叠）
 │   ├── WikiPageNavigator.tsx     # 多页面导航
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板
 │   ├── Mermaid.tsx               # 交互式图表
 │   ├── SourceCodePanel.tsx       # 源码阅读器
-│   └── QuestionSelector.tsx      # 问题选择器
+│   ├── QuestionSelector.tsx      # 问题选择器
+│   ├── chat/                     # 聊天组件（v2.1）
+│   │   ├── ChatPanel.tsx         # 聊天面板容器
+│   │   ├── ChatMessage.tsx       # 消息组件
+│   │   ├── SelectionBar.tsx      # 选中指示栏
+│   │   └── DiffConfirmBar.tsx    # Diff 确认栏
+│   ├── wiki/                     # Wiki 组件（v2.1）
+│   │   └── WikiContent.tsx       # Wiki 内容区域
+│   └── mermaid/                  # Mermaid 组件（v2.1）
+│       └── MermaidModal.tsx      # Mermaid 模态框
+├── hooks/                        # 自定义 Hooks（v2.1）
+│   ├── useBlockSelection.ts      # 块选择管理
+│   ├── useDiffMode.ts            # Diff 模式
+│   ├── useChatHistory.ts         # 聊天历史
+│   ├── useSourcePanel.ts         # 源码面板
+│   └── useWikiPages.ts           # Wiki 页面导航
 ├── services/
 │   ├── geminiService.ts          # Gemini AI 服务
 │   └── codenexusWikiService.ts   # CodeNexus API 服务
@@ -110,13 +125,14 @@ npm run dev
 
 | 版本 | 更新 |
 |------|------|
+| v2.1 | **组件重构**：提取 7 个自定义 Hooks、新建 chat/wiki/mermaid 组件目录、ChatPanel/WikiContent 共享组件、主视图代码量减少 51% |
 | v2.0 | 变更预览工作流重构：预览与应用分离、`/api/apply_changes` 接口、Mermaid 删除状态视觉效果、前后端块插入逻辑统一 |
 | v1.9 | Wiki 生成历史管理：侧边栏入口、全局历史面板、自动保存（最多 50 条）、快速恢复、时间格式化 |
 | v1.8 | Mermaid 交互优化：修复图表类型检测 bug、类型感知的节点 ID 提取、支持 4 种图表类型精确交互 |
 | v1.7 | 源码面板优化：自动扫描目录、文件树左侧布局、可调整宽度、范围高亮、智能交互 |
-| v1.6 | Mermaid 节点映射 bug 修复（正确使用 mapping 中的 sourceRef）、查看图表源代码时自动居中显示图表、onMermaidNodeClick 回调增加 blockId 参数 |
-| v1.5 |源代码联动高亮（WikiBlock、Mermaid 节点）、聊天面板随源代码面板自适应、导航栏大纲视图层级标题样式 |
-| v1.4 | 可调整布局：聊天面板拖拽调整、导航栏/源代码面板/问题选择器可调整大小、Wiki 内容自适应 |
+| v1.6 | Mermaid 节点映射 bug 修复、查看图表源代码时自动居中、onMermaidNodeClick 回调增加 blockId |
+| v1.5 | 源代码联动高亮、聊天面板自适应、导航栏大纲视图层级标题样式 |
+| v1.4 | 可调整布局：聊天面板拖拽调整、导航栏/源代码面板/问题选择器可调整大小 |
 | v1.3 | 树形结构重构、递归渲染、折叠功能 |
 | v1.2 | 多页面导航系统 |
 | v1.1 | UI 交互优化 |

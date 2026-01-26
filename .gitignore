@@ -37,7 +37,7 @@ Desktop.ini
 
 # Conversion output
 **/wiki_result/
-/wiki
+
 /server/user_data/
 # Frontend (if not using submodule)
 frontend/node_modules/
