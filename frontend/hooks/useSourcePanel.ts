@@ -20,11 +20,10 @@ interface UseSourcePanelReturn {
 
 interface UseSourcePanelOptions {
   initialWidth?: number;
-  fallbackLocationGenerator?: () => SourceLocation;
 }
 
 export function useSourcePanel(options: UseSourcePanelOptions = {}): UseSourcePanelReturn {
-  const { initialWidth = 600, fallbackLocationGenerator } = options;
+  const { initialWidth = 600 } = options;
 
   const [isSourcePanelOpen, setIsSourcePanelOpen] = useState(false);
   const [activeSourceLocation, setActiveSourceLocation] = useState<SourceLocation | null>(null);
@@ -80,17 +79,12 @@ export function useSourcePanel(options: UseSourcePanelOptions = {}): UseSourcePa
   }, [openSourcePanel]);
 
   const handleMermaidNodeClick = useCallback((nodeId: string, metadata?: MermaidMetadata, blockId?: string) => {
-    let location = metadata?.sourceMapping?.[nodeId];
-
-    if (!location && fallbackLocationGenerator) {
-      console.log(`No strict mapping for node ${nodeId}, using fallback.`);
-      location = fallbackLocationGenerator();
-    }
+    const location = metadata?.sourceMapping?.[nodeId];
 
     if (location) {
       openSourcePanel(location, blockId, nodeId);
     }
-  }, [openSourcePanel, fallbackLocationGenerator]);
+  }, [openSourcePanel]);
 
   return {
     isSourcePanelOpen,

@@ -22,6 +22,7 @@ import { Bot, Zap } from 'lucide-react';
 
 interface CodeNexusAnalysisViewProps {
   type: AnalysisType;
+  isSidebarCollapsed?: boolean;
 }
 
 const TITLE_MAP: Record<AnalysisType, string> = {
@@ -33,7 +34,7 @@ const TITLE_MAP: Record<AnalysisType, string> = {
   [AnalysisType.DATABASE]: '数据库模型',
 };
 
-const CodeNexusAnalysisView: React.FC<CodeNexusAnalysisViewProps> = ({ type }) => {
+const CodeNexusAnalysisView: React.FC<CodeNexusAnalysisViewProps> = ({ type, isSidebarCollapsed = false }) => {
   // Local state
   const [isLoading, setIsLoading] = useState(false);
   const [prompt, setPrompt] = useState<string>('');
@@ -301,7 +302,7 @@ const CodeNexusAnalysisView: React.FC<CodeNexusAnalysisViewProps> = ({ type }) =
   }, [addSimpleMessage]);
 
   return (
-    <div className="h-full relative flex flex-col bg-[#F5F5F7]">
+    <div className="h-full relative flex flex-col bg-transparent">
       <SourceCodePanel
         isOpen={isSourcePanelOpen}
         onClose={closeSourcePanel}
@@ -313,7 +314,7 @@ const CodeNexusAnalysisView: React.FC<CodeNexusAnalysisViewProps> = ({ type }) =
       {/* Main Content Area */}
       <div
         ref={mainContentRef}
-        className="flex-1 overflow-y-auto scroll-smooth no-scrollbar w-full pb-[200px]"
+        className="flex-1 overflow-hidden w-full pb-[200px]"
       >
         {!hasContent && (
           <div className="min-h-[50vh] flex flex-col items-center justify-center px-6 animate-in fade-in duration-700 pt-10">
@@ -360,7 +361,7 @@ const CodeNexusAnalysisView: React.FC<CodeNexusAnalysisViewProps> = ({ type }) =
       </div>
 
       {/* Unified Chat Deck (Bottom Sheet) */}
-      <div className="fixed bottom-0 left-64 right-0 z-50 flex flex-col items-center transition-all duration-500 ease-apple-ease">
+      <div className={`fixed bottom-0 ${isSidebarCollapsed ? 'left-16' : 'left-64'} right-0 z-50 flex flex-col items-center transition-all duration-500 ease-apple-ease`}>
         <ChatPanel
           chatHistory={chatHistory}
           isChatExpanded={isChatExpanded}

@@ -76,7 +76,7 @@ def main():
             # Choose parsing method based on file extension
             if is_meta_json:
                 json_data = json.loads(content)
-                result = parser_obj.parse_json(json_data)
+                result = parser_obj.parse_json(json_data, str(input_file))
             else:
                 result = parser_obj.parse(content, str(input_file))
 

@@ -80,14 +80,14 @@ CodeNexus.AI 是一个基于 AI 的代码分析和文档生成工具，支持双
 ```
 codewiki-ai/
 ├── components/                    # React 组件
-│   ├── AnalysisView.tsx          # 核心视图：聊天、Wiki 渲染、状态管理（784行）
-│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图（413行）
+│   ├── AnalysisView.tsx          # 核心视图：聊天、Wiki 渲染、状态管理
+│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图
 │   ├── Dashboard.tsx             # 仪表盘：统计图表
 │   ├── Sidebar.tsx               # 侧边栏导航（含历史记录入口）
-│   ├── WikiBlock.tsx             # 原子块渲染器（支持递归、折叠、三点菜单、高亮）
+│   ├── WikiBlock.tsx             # 原子块渲染器（支持递归、折叠、三点菜单、高亮、Neo4j ID 卡片）
 │   ├── WikiPageNavigator.tsx     # 多页面树形导航器（可调整大小、结构导航、层级标题）
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板（侧边栏滑入）
-│   ├── Mermaid.tsx               # Mermaid 图表封装（支持节点高亮）
+│   ├── Mermaid.tsx               # Mermaid 图表封装（支持节点高亮、subgraph 高亮、Neo4j ID 显示）
 │   ├── SourceCodePanel.tsx       # 源代码阅读器（可调整宽度、联动高亮）
 │   ├── QuestionSelector.tsx      # CodeNexus 问题选择器（可调整大小）
 │   │
@@ -107,12 +107,16 @@ codewiki-ai/
 │       ├── MermaidModal.tsx      # Mermaid 模态框
 │       └── index.ts
 │
+├── config/                        # 配置文件（v2.2 新增）
+│   └── wikiThemes.ts             # Wiki 主题配置（Apple/GitHub/Notion/Technical 四套主题）
+│
 ├── hooks/                         # 自定义 Hooks（v2.1 重构）
 │   ├── useBlockSelection.ts      # 块选择管理
 │   ├── useDiffMode.ts            # Diff 模式管理
 │   ├── useChatHistory.ts         # 聊天历史管理
 │   ├── useSourcePanel.ts         # 源代码面板状态
 │   ├── useWikiPages.ts           # Wiki 页面导航
+│   ├── useWikiTheme.ts           # Wiki 主题管理（v2.2 新增）
 │   ├── useMermaidModal.ts        # Mermaid 模态框（仅 AnalysisView）
 │   ├── useResizablePanel.ts      # 通用可调整大小面板
 │   └── index.ts
@@ -1333,8 +1337,8 @@ function extractNodeIdByChartType(element: Element, chartType: string): string |
 const handleContextMenu = (e: MouseEvent) => {
   const target = e.target as HTMLElement;
 
-  // 根据图表类型选择选择器
-  let selector = '.node, .actor, .messageText, .task, .classSection, [id^="flowchart-"], g[id]';
+  // 根据图表类型选择选择器（v2.2 新增 .cluster 支持 subgraph）
+  let selector = '.node, .cluster, .actor, .messageText, .task, .classSection, [id^="flowchart-"], g[id]';
 
   if (chartType === 'classDiagram') {
     selector = '.classGroup, .node, g[id^="classId-"]';
@@ -1350,10 +1354,11 @@ const handleContextMenu = (e: MouseEvent) => {
     // 使用类型感知的提取函数
     const foundId = extractNodeIdByChartType(interactiveGroup, chartType);
 
-    // 检查节点是否在 sourceMapping 中
+    // 检查节点是否在 sourceMapping 或 neo4jIds 中（v2.2 新增 neo4jIds 支持）
     const hasMapping = metadata?.sourceMapping?.[foundId];
+    const hasNeo4jId = neo4jIds?.[foundId];
 
-    if (hasMapping) {
+    if (hasMapping || hasNeo4jId) {
       e.preventDefault();
       setActiveNodeId(foundId);
       setMenuPosition({ x: e.clientX, y: e.clientY });
@@ -1362,19 +1367,55 @@ const handleContextMenu = (e: MouseEvent) => {
 };
 ```
 
+#### Subgraph 高亮支持（v2.2 新增）
+
+Mermaid 的 subgraph（子图）在渲染时有特殊的 DOM 结构：
+
+- **有子节点的 subgraph**：渲染为 `.cluster` 类元素，ID 直接是原始 ID（如 `id="A"`）
+- **空的 subgraph**：渲染为普通 `.node` 类元素，ID 也是原始 ID（如 `id="F"`）
+
+```typescript
+// 高亮逻辑需要同时处理 cluster 和普通节点
+allGroups.forEach(group => {
+  const id = group.getAttribute('id') || '';
+
+  // 普通节点: flowchart-{nodeId}-数字
+  const nodeMatch = id.match(/^flowchart-(.+?)-\d+$/);
+  if (nodeMatch && nodeMatch[1] === highlightedNodeId) {
+    applyHighlight(group);
+    return;
+  }
+
+  // Subgraph/Cluster: 直接用 id 匹配
+  if (group.classList.contains('cluster') && id === highlightedNodeId) {
+    applyHighlight(group);
+    return;
+  }
+
+  // 空的 subgraph 作为普通节点
+  if (id === highlightedNodeId) {
+    applyHighlight(group);
+    return;
+  }
+});
+```
+
 #### 选择器对比表
 
 | 图表类型 | DOM ID 格式 | CSS 选择器 | ID 提取策略 |
 |---------|------------|-----------|------------|
-| flowchart/graph | `flowchart-NodeId-123` | `.node, [id^="flowchart-"]` | 正则提取中间的 NodeId |
+| flowchart/graph 普通节点 | `flowchart-NodeId-123` | `.node, [id^="flowchart-"]` | 正则提取中间的 NodeId |
+| flowchart/graph subgraph | `A`（原始 ID） | `.cluster` | 直接使用 DOM ID |
 | classDiagram | `classId-ClassName-0` | `.classGroup, .node, g[id^="classId-"]` | 提取类名，去除数字后缀 |
 | sequenceDiagram | `actor0` | `.actor, .messageText, g[id^="actor"]` | 提取 text 元素的文本内容 |
 | stateDiagram | `state-StateName` | `.node, .state, g[id^="state-"]` | 提取状态名称 |
 
 **效果**：
 - 有映射的节点：鼠标悬停显示 `context-menu` 光标，右键可打开菜单
-- 无映射的节点：鼠标悬停显示 `default` 光标，右键无反应
+- 有 Neo4j ID 的节点：同样可以右键查看 Neo4j ID（v2.2 新增）
+- 无映射且无 Neo4j ID 的节点：鼠标悬停显示 `default` 光标，右键无反应
 - 支持 4 种核心图表类型的精确交互
+- 支持 subgraph 高亮（v2.2 新增）
 
 ---
 
@@ -1784,10 +1825,180 @@ const MyComponent = () => {
 
 ---
 
+## 主题系统（v2.2）
+
+### 概述
+
+v2.2 版本引入了 Wiki 主题系统，支持多套视觉风格切换。主题影响所有 Wiki 内容的显示，包括标题、段落、代码块、表格、Mermaid 图表和 Neo4j ID 卡片等。
+
+### 可用主题
+
+| 主题 ID | 名称 | 描述 |
+|---------|------|------|
+| `apple` | Apple | Liquid Glass 液态玻璃风格（默认） |
+| `github` | GitHub | 经典 Markdown 风格 |
+| `notion` | Notion | 现代简约，大间距 |
+| `technical` | Technical | 紧凑专业，适合代码文档 |
+
+### 配置文件结构
+
+```typescript
+// config/wikiThemes.ts
+export interface WikiTheme {
+  id: string;
+  name: string;
+  description: string;
+
+  // 标题样式
+  heading: { h1: string; h2: string; h3: string; h4: string; h5: string; h6: string; };
+  headingContainer: { h1: string; h2: string; h3: string; h4: string; h5: string; h6: string; };
+  h3Dot: string | null;
+
+  // 内容样式
+  paragraph: string;
+  paragraphInner: string;
+  list: string;
+  ul: string;
+  ol: string;
+  li: string;
+
+  // 代码块样式
+  codeBlock: string;
+  codeHeader: string;
+  codeHeaderDots: boolean;
+  inlineCode: string;
+
+  // 表格样式
+  table: string;
+  thead: string;
+  tbody: string;
+  tr: string;
+  th: string;
+  td: string;
+
+  // 其他样式
+  link: string;
+  hr: string;
+  hrDot: boolean;
+  mermaid: string;
+  strong: string;
+  em: string;
+
+  // 导航栏样式
+  navigator: {
+    activeItem: string;
+    activeIcon: string;
+    inactiveIcon: string;
+    hoverBg: string;
+    tabActive: string;
+    tabInactive: string;
+    border: string;
+  };
+
+  // Neo4j ID 卡片样式
+  neo4jCard: {
+    container: string;      // 大卡片容器（包含背景、边框、flex 布局）
+    label: string;          // "Neo4j Source" 文字样式
+    labelIcon: string;      // 图标颜色
+    idTag: string;          // ID 小标签样式
+    idTagActive: string;    // ID 标签激活状态
+    activeNodeText: string; // 激活节点文字样式
+    activeIdText: string;   // 激活 ID 文字样式
+  };
+}
+```
+
+### useWikiTheme Hook
+
+```typescript
+// hooks/useWikiTheme.ts
+import { useWikiTheme, useWikiThemeState, WikiThemeContext } from '../hooks/useWikiTheme';
+
+// 在顶层组件创建主题状态
+const App = () => {
+  const themeState = useWikiThemeState('apple'); // 初始主题
+
+  return (
+    <WikiThemeContext.Provider value={themeState}>
+      <MyComponent />
+    </WikiThemeContext.Provider>
+  );
+};
+
+// 在子组件中使用主题
+const MyComponent = () => {
+  const { theme, themeId, setThemeId, availableThemes } = useWikiTheme();
+
+  return (
+    <div className={theme.paragraph}>
+      {/* 使用主题样式 */}
+    </div>
+  );
+};
+```
+
+### 主题持久化
+
+主题选择会自动保存到 `localStorage`，键名为 `wiki-theme`。页面刷新后会自动恢复上次选择的主题。
+
+### Neo4j ID 卡片
+
+Neo4j ID 卡片显示与 Mermaid 节点关联的 Neo4j 数据库 ID，支持：
+
+- **大卡片布局**：横向排列，"Neo4j Source" 标签后跟 ID 小标签
+- **主题适配**：样式随主题变化
+- **交互高亮**：点击 ID 标签可高亮对应的 Mermaid 节点
+
+```tsx
+// components/WikiBlock.tsx
+const renderNeo4jIdCard = (neo4jIds: Neo4jIdMapping | undefined, isMermaid: boolean = false) => {
+  return (
+    <div className={theme.neo4jCard.container}>
+      <span className={theme.neo4jCard.label}>
+        <Database size={12} className={theme.neo4jCard.labelIcon} />
+        Neo4j Source
+      </span>
+      {idArray.map(id => (
+        <span
+          key={id}
+          className={`${theme.neo4jCard.idTag} ${isActive ? theme.neo4jCard.idTagActive : ''}`}
+          onClick={() => handleIdClick(id)}
+        >
+          {id}
+        </span>
+      ))}
+    </div>
+  );
+};
+```
+
+### Mermaid 右键菜单 Neo4j ID 显示
+
+右键点击 Mermaid 节点时，如果该节点有关联的 Neo4j ID，会在菜单底部显示：
+
+```tsx
+// components/Mermaid.tsx
+{neo4jIds?.[activeNodeId] && (
+  <div className="px-3 py-2.5 text-xs border-t border-gray-100 flex items-center gap-2 bg-blue-50/50">
+    <Database size={14} className="text-blue-600" />
+    <span className="text-gray-500">Neo4j ID:</span>
+    <span className="font-mono text-blue-600">{neo4jIds[activeNodeId]}</span>
+  </div>
+)}
+```
+
+**右键菜单显示条件**：
+- 有 `sourceMapping` → 显示"定位源代码位置"按钮
+- 有 `neo4jIds` → 显示 Neo4j ID 信息
+- 两者都没有 → 不显示右键菜单
+
+---
+
 ## 版本历史
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v2.2 | 2026-01-28 | **主题系统与 Mermaid 增强**：新增 Wiki 主题系统（Apple/GitHub/Notion/Technical 四套主题）、useWikiTheme Hook、config/wikiThemes.ts 配置文件、Neo4j ID 卡片样式随主题变化、Mermaid subgraph 高亮支持、右键菜单显示 Neo4j ID、移除 useSourcePanel 的 fallbackLocationGenerator |
 | v2.1 | 2026-01-23 | 组件重构：提取 7 个自定义 Hooks（useBlockSelection、useDiffMode、useChatHistory、useSourcePanel、useWikiPages、useMermaidModal、useResizablePanel）、新建 chat/wiki/mermaid 组件目录、ChatPanel/WikiContent/MermaidModal 等共享组件、主视图代码量减少 51%（2445行→1197行） |
 | v2.0 | 2026-01-22 | 变更预览工作流重构：预览与应用分离、添加 `/api/apply_changes` 接口、`pendingPageDiff` 状态管理、Mermaid 删除状态视觉效果（X 线+标签）、前后端块插入逻辑统一（section→子节点，其他→兄弟节点）、后端函数重构（fetch_page/apply_changes 移至 server.py 作为真实实现） |
 | v1.9 | 2026-01-14 | Wiki 生成历史管理：侧边栏入口、全局历史面板（z-index 60/70）、自动保存（最多 50 条）、快速恢复、时间格式化、修复仪表盘无法显示历史和层级冲突问题 |

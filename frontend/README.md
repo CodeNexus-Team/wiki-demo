@@ -12,9 +12,11 @@
 - **6 大分析视图** - 架构、API、业务流程、控制流、数据库、仪表盘
 - **交互式 Wiki 对象** - 文档拆解为可操作的原子块，支持块级选择和修改
 - **源码映射** - Mermaid 图表节点直接关联源代码，右键跳转
+- **Neo4j ID 关联** - Mermaid 节点与 Neo4j 图数据库 ID 关联，支持交互高亮
 - **实时 Diff** - 可视化新增（绿）、修改（黄）、删除（红）
 - **多页面导航** - 树形导航器支持多 Wiki 页面切换
 - **历史记录管理** - 自动保存生成历史，侧边栏一键访问，支持快速恢复
+- **主题系统** - 4 套视觉主题（Apple/GitHub/Notion/Technical），支持切换和持久化
 
 ---
 
@@ -35,12 +37,12 @@
 ```
 codewiki-ai/
 ├── components/
-│   ├── AnalysisView.tsx          # 核心视图（784行）
-│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图（413行）
-│   ├── WikiBlock.tsx             # 原子块渲染器（递归+折叠）
+│   ├── AnalysisView.tsx          # 核心视图
+│   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图
+│   ├── WikiBlock.tsx             # 原子块渲染器（递归+折叠+Neo4j ID 卡片）
 │   ├── WikiPageNavigator.tsx     # 多页面导航
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板
-│   ├── Mermaid.tsx               # 交互式图表
+│   ├── Mermaid.tsx               # 交互式图表（支持 subgraph 高亮、Neo4j ID）
 │   ├── SourceCodePanel.tsx       # 源码阅读器
 │   ├── QuestionSelector.tsx      # 问题选择器
 │   ├── chat/                     # 聊天组件（v2.1）
@@ -52,12 +54,15 @@ codewiki-ai/
 │   │   └── WikiContent.tsx       # Wiki 内容区域
 │   └── mermaid/                  # Mermaid 组件（v2.1）
 │       └── MermaidModal.tsx      # Mermaid 模态框
-├── hooks/                        # 自定义 Hooks（v2.1）
+├── config/                       # 配置文件（v2.2）
+│   └── wikiThemes.ts             # Wiki 主题配置（4套主题）
+├── hooks/                        # 自定义 Hooks（v2.1/v2.2）
 │   ├── useBlockSelection.ts      # 块选择管理
 │   ├── useDiffMode.ts            # Diff 模式
 │   ├── useChatHistory.ts         # 聊天历史
 │   ├── useSourcePanel.ts         # 源码面板
-│   └── useWikiPages.ts           # Wiki 页面导航
+│   ├── useWikiPages.ts           # Wiki 页面导航
+│   └── useWikiTheme.ts           # Wiki 主题管理（v2.2）
 ├── services/
 │   ├── geminiService.ts          # Gemini AI 服务
 │   └── codenexusWikiService.ts   # CodeNexus API 服务
@@ -125,6 +130,7 @@ npm run dev
 
 | 版本 | 更新 |
 |------|------|
+| v2.2 | **主题系统**：Wiki 主题切换（Apple/GitHub/Notion/Technical）、Neo4j ID 卡片样式随主题变化、Mermaid subgraph 高亮、右键菜单 Neo4j ID 显示 |
 | v2.1 | **组件重构**：提取 7 个自定义 Hooks、新建 chat/wiki/mermaid 组件目录、ChatPanel/WikiContent 共享组件、主视图代码量减少 51% |
 | v2.0 | 变更预览工作流重构：预览与应用分离、`/api/apply_changes` 接口、Mermaid 删除状态视觉效果、前后端块插入逻辑统一 |
 | v1.9 | Wiki 生成历史管理：侧边栏入口、全局历史面板、自动保存（最多 50 条）、快速恢复、时间格式化 |

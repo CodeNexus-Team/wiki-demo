@@ -2,8 +2,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import mermaid from 'mermaid';
-import { Code, ExternalLink } from 'lucide-react';
-import { MermaidMetadata } from '../types';
+import { Code, ExternalLink, Database } from 'lucide-react';
+import { MermaidMetadata, Neo4jIdMapping } from '../types';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -101,10 +101,15 @@ function extractNodeIdByChartType(element: Element, chartType: string): string |
 
   // Block 图表（flowchart/graph）
   if (chartType === 'graph' || chartType === 'flowchart') {
-    // flowchart-NodeId-123 格式
+    // 普通节点: flowchart-NodeId-123 格式
     const idMatch = domId.match(/^flowchart-(.+?)-\d+$/);
     if (idMatch) {
       return idMatch[1];
+    }
+
+    // Subgraph/Cluster: Mermaid 直接用原始 ID 作为 g 元素的 id
+    if (element.classList.contains('cluster') || element.classList.contains('node')) {
+      return domId || null;
     }
   }
 
@@ -176,13 +181,14 @@ function extractNodeIdByChartType(element: Element, chartType: string): string |
 interface MermaidProps {
   chart: string;
   metadata?: MermaidMetadata;
+  neo4jIds?: Neo4jIdMapping;
   onNodeClick?: (nodeId: string, metadata?: MermaidMetadata) => void;
   highlightedNodeId?: string | null;
   onDoubleClick?: () => void;
   status?: 'inserted' | 'deleted' | 'modified' | 'original';
 }
 
-const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlightedNodeId, onDoubleClick, status }) => {
+const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, onNodeClick, highlightedNodeId, onDoubleClick, status }) => {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ type: string; message: string } | null>(null);
@@ -242,7 +248,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
     const handleMouseOver = (e: MouseEvent) => {
         const target = e.target as HTMLElement;
         // 根据图表类型选择合适的选择器
-        let selector = '.node, .actor, .messageText, .task, .classSection, [id^="flowchart-"], g[id]';
+        let selector = '.node, .cluster, .actor, .messageText, .task, .classSection, [id^="flowchart-"], g[id]';
 
         if (chartType === 'classDiagram') {
             selector = '.classGroup, .node, g[id^="classId-"]';
@@ -259,10 +265,11 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
             const foundId = extractNodeIdByChartType(interactiveGroup, chartType);
 
             if (foundId) {
-                // 检查节点是否在 sourceMapping 中
+                // 检查节点是否在 sourceMapping 或 neo4jIds 中
                 const hasMapping = metadata?.sourceMapping?.[foundId];
+                const hasNeo4jId = neo4jIds?.[foundId];
 
-                if (hasMapping) {
+                if (hasMapping || hasNeo4jId) {
                     // 为可交互节点添加鼠标指针样式
                     (interactiveGroup as HTMLElement).style.cursor = 'context-menu';
                 } else {
@@ -275,7 +282,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
     const handleContextMenu = (e: MouseEvent) => {
         const target = e.target as HTMLElement;
         // 根据图表类型选择合适的选择器
-        let selector = '.node, .actor, .messageText, .task, .classSection, [id^="flowchart-"], g[id]';
+        let selector = '.node, .cluster, .actor, .messageText, .task, .classSection, [id^="flowchart-"], g[id]';
 
         if (chartType === 'classDiagram') {
             selector = '.classGroup, .node, g[id^="classId-"]';
@@ -292,16 +299,17 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
             const foundId = extractNodeIdByChartType(interactiveGroup, chartType);
 
             if (foundId) {
-                // 检查节点是否在 sourceMapping 中
+                // 检查节点是否在 sourceMapping 或 neo4jIds 中
                 const hasMapping = metadata?.sourceMapping?.[foundId];
+                const hasNeo4jId = neo4jIds?.[foundId];
 
-                if (hasMapping) {
-                    // 只有在 mapping 中存在的节点才显示右键菜单
+                if (hasMapping || hasNeo4jId) {
+                    // 在 mapping 或 neo4jIds 中存在的节点显示右键菜单
                     e.preventDefault();
                     setActiveNodeId(foundId);
                     setMenuPosition({ x: e.clientX, y: e.clientY });
                 } else {
-                    // 节点不在 mapping 中，不显示菜单
+                    // 节点不在 mapping 和 neo4jIds 中，不显示菜单
                     setMenuPosition(null);
                 }
             } else {
@@ -326,30 +334,71 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
         container.removeEventListener('contextmenu', handleContextMenu);
         window.removeEventListener('click', handleClick);
     };
-  }, [svg, metadata, chartType]);
+  }, [svg, metadata, neo4jIds, chartType]);
 
-  // Inject highlight styles into SVG
-  const getHighlightedSvg = () => {
-    if (!svg || !highlightedNodeId) return svg;
+  // 设置 SVG 内容
+  useEffect(() => {
+    if (!containerRef.current || !svg) return;
+    containerRef.current.innerHTML = svg;
+  }, [svg]);
 
-    // Inject CSS style for highlighted nodes into SVG
-    const highlightStyle = `
-      <style>
-        [id^="flowchart-${highlightedNodeId}-"] { filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6)) !important; }
-        [id^="flowchart-${highlightedNodeId}-"] rect,
-        [id^="flowchart-${highlightedNodeId}-"] circle,
-        [id^="flowchart-${highlightedNodeId}-"] ellipse,
-        [id^="flowchart-${highlightedNodeId}-"] polygon,
-        [id^="flowchart-${highlightedNodeId}-"] path:not([class*="edge"]) {
-          stroke: #f97316 !important;
-          stroke-width: 3px !important;
-        }
-      </style>
-    `;
+  // 高亮节点 - SVG 渲染后通过 DOM 操作
+  useEffect(() => {
+    if (!containerRef.current || !svg) return;
 
-    // Insert style after opening <svg> tag
-    return svg.replace(/<svg([^>]*)>/, `<svg$1>${highlightStyle}`);
-  };
+    const container = containerRef.current;
+
+    // 清除之前的高亮样式
+    container.querySelectorAll('[data-neo4j-highlighted]').forEach(el => {
+      el.removeAttribute('data-neo4j-highlighted');
+      const shapes = el.querySelectorAll('rect, circle, ellipse, polygon, path');
+      shapes.forEach(shape => {
+        (shape as HTMLElement).style.stroke = '';
+        (shape as HTMLElement).style.strokeWidth = '';
+        (shape as HTMLElement).style.filter = '';
+      });
+    });
+
+    if (!highlightedNodeId) return;
+
+    // 高亮样式应用函数
+    const applyHighlight = (group: Element) => {
+      group.setAttribute('data-neo4j-highlighted', 'true');
+      // 高亮形状 - 直接子元素
+      const shapes = group.querySelectorAll(':scope > rect, :scope > circle, :scope > ellipse, :scope > polygon, :scope > path');
+      shapes.forEach(shape => {
+        (shape as HTMLElement).style.stroke = '#f97316';
+        (shape as HTMLElement).style.strokeWidth = '3px';
+        (shape as HTMLElement).style.filter = 'drop-shadow(0 0 8px rgba(249, 115, 22, 0.6))';
+      });
+    };
+
+    // 查找需要高亮的元素
+    const allGroups = container.querySelectorAll('g[id]');
+
+    allGroups.forEach(group => {
+      const id = group.getAttribute('id') || '';
+
+      // 普通节点: flowchart-{highlightedNodeId}-数字
+      const nodeMatch = id.match(/^flowchart-(.+?)-\d+$/);
+      if (nodeMatch && nodeMatch[1] === highlightedNodeId) {
+        applyHighlight(group);
+        return;
+      }
+
+      // Subgraph/Cluster: 检查 .cluster 类（Mermaid 直接用原始 ID 作为 g 元素的 id）
+      if (group.classList.contains('cluster') && id === highlightedNodeId) {
+        applyHighlight(group);
+        return;
+      }
+
+      // 空的 subgraph 可能被渲染为普通节点，直接用 id 匹配
+      if (id === highlightedNodeId) {
+        applyHighlight(group);
+        return;
+      }
+    });
+  }, [svg, highlightedNodeId]);
 
   if (error) {
     return (
@@ -389,7 +438,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
       case 'modified':
         return 'border-2 border-amber-400 bg-amber-50/50';
       default:
-        return 'border border-[#00000008] bg-white';
+        return 'bg-transparent';
     }
   };
 
@@ -410,7 +459,6 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
           <div
               ref={containerRef}
               className={`mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 rounded-xl shadow-sm cursor-default ${getStatusStyles()}`}
-              dangerouslySetInnerHTML={{ __html: getHighlightedSvg() }}
               onClick={() => setMenuPosition(null)}
               onDoubleClick={onDoubleClick}
           />
@@ -426,22 +474,31 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, onNodeClick, highlig
                 <div className="px-3 py-2 bg-gray-50/50 border-b border-gray-100 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Node Actions
                 </div>
-                <button
-                    onClick={() => {
-                        if (activeNodeId && onNodeClick) {
-                            onNodeClick(activeNodeId, metadata);
-                        }
-                        setMenuPosition(null);
-                    }}
-                    className="w-full text-left px-3 py-2.5 text-xs text-[#1d1d1f] hover:bg-[#0071E3] hover:text-white transition-colors flex items-center gap-2"
-                >
-                    <Code size={14} />
-                    定位源代码位置
-                </button>
+                {metadata?.sourceMapping?.[activeNodeId] && (
+                    <button
+                        onClick={() => {
+                            if (activeNodeId && onNodeClick) {
+                                onNodeClick(activeNodeId, metadata);
+                            }
+                            setMenuPosition(null);
+                        }}
+                        className="w-full text-left px-3 py-2.5 text-xs text-[#1d1d1f] hover:bg-[#0071E3] hover:text-white transition-colors flex items-center gap-2"
+                    >
+                        <Code size={14} />
+                        定位源代码位置
+                    </button>
+                )}
                 <button className="w-full text-left px-3 py-2.5 text-xs text-[#1d1d1f] hover:bg-gray-100/50 transition-colors flex items-center gap-2 opacity-50 cursor-not-allowed">
                     <ExternalLink size={14} />
                     查看相关文档
                 </button>
+                {neo4jIds?.[activeNodeId] && (
+                    <div className="px-3 py-2.5 text-xs text-[#1d1d1f] border-t border-gray-100 flex items-center gap-2 bg-blue-50/50">
+                        <Database size={14} className="text-blue-600" />
+                        <span className="text-gray-500">Neo4j ID:</span>
+                        <span className="font-mono text-blue-600">{neo4jIds[activeNodeId]}</span>
+                    </div>
+                )}
             </div>,
             document.body
         )}

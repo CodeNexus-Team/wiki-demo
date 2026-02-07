@@ -430,12 +430,13 @@ class MarkdownToJsonParser:
         flush_text_buffer()
         return root
 
-    def parse_json(self, json_data):
+    def parse_json(self, json_data, file_path=None):
         """
         解析 JSON 格式的输入
 
         Args:
             json_data: 包含 wiki 数组和 source_id_list 的字典
+            file_path: 可选的文件路径，用于在内容不以一级标题开头时自动生成标题
 
         Returns:
             解析后的完整输出结构
@@ -448,6 +449,9 @@ class MarkdownToJsonParser:
         stack = [{"level": 0, "content": root}]
 
         for item in wiki_items:
+            # 读取 neo4j_id 字段
+            item_neo4j_id = item.get("neo4j_id", {})
+
             # 判断是 markdown 类型还是 mermaid 类型
             if "markdown" in item:
                 # markdown 类型
@@ -455,7 +459,7 @@ class MarkdownToJsonParser:
                 item_source_id = item.get("source_id", [])
 
                 # 解析 markdown 片段，合并到当前结构
-                self._parse_and_merge(markdown_text, item_source_id, None, stack)
+                self._parse_and_merge(markdown_text, item_source_id, None, stack, item_neo4j_id)
 
             elif "mermaid" in item:
                 # mermaid 类型
@@ -464,7 +468,38 @@ class MarkdownToJsonParser:
                 item_source_id = item.get("source_id", [])
 
                 # 解析 mermaid 片段（可能包含标题），合并到当前结构
-                self._parse_and_merge(mermaid_text, item_source_id, item_mapping, stack)
+                self._parse_and_merge(mermaid_text, item_source_id, item_mapping, stack, item_neo4j_id)
+
+        # 检查是否以一级标题开头，如果不是且提供了 file_path，则自动添加
+        if file_path and root:
+            first_item = root[0]
+            # 检查第一个元素是否是一级标题（type 为 section 且 title 以 "# " 开头但不是 "## "）
+            is_h1 = (
+                first_item.get("type") == "section" and
+                first_item.get("title", "").startswith("# ") and
+                not first_item.get("title", "").startswith("## ")
+            )
+
+            if not is_h1:
+                # 从文件路径提取文件名（去除扩展名，包括 .meta.json）
+                file_name = os.path.basename(file_path)
+                # 移除 .meta.json 或 .json 扩展名
+                if file_name.endswith('.meta.json'):
+                    file_name = file_name[:-len('.meta.json')]
+                elif file_name.endswith('.json'):
+                    file_name = file_name[:-len('.json')]
+                else:
+                    file_name = os.path.splitext(file_name)[0]
+
+                # 创建一级标题 section，将原有内容作为其子内容
+                h1_section = {
+                    "type": "section",
+                    "id": self._generate_id(),
+                    "title": f"# {file_name}",
+                    "content": root,
+                    "neo4j_id": {}
+                }
+                root = [h1_section]
 
         # 构建最终输出
         final_output = {
@@ -474,7 +509,7 @@ class MarkdownToJsonParser:
 
         return final_output
 
-    def _parse_and_merge(self, markdown_text, source_id, mapping, stack):
+    def _parse_and_merge(self, markdown_text, source_id, mapping, stack, neo4j_id=None):
         """
         解析 markdown 片段并合并到现有结构中
 
@@ -483,7 +518,10 @@ class MarkdownToJsonParser:
             source_id: source_id 列表
             mapping: mermaid mapping（可为 None）
             stack: 当前栈状态
+            neo4j_id: neo4j_id 映射（可为 None）
         """
+        if neo4j_id is None:
+            neo4j_id = {}
         lines = markdown_text.split('\n')
 
         text_buffer = []
@@ -532,7 +570,8 @@ class MarkdownToJsonParser:
                                 "mapping": chart_mapping,
                                 "mermaid": code_content_str
                             },
-                            "source_id": source_id
+                            "source_id": source_id,
+                            "neo4j_id": neo4j_id
                         }
                         stack[-1]["content"].append(chart_node)
                     else:
@@ -560,12 +599,22 @@ class MarkdownToJsonParser:
                 flush_text_buffer()
 
                 header_level = len(line.split()[0])
+                title_text = line.strip()
+
+                # 从标题中提取章节号（如 "## 2.1 标题" -> "2.1"）
+                section_num_match = re.search(r'^#+\s*(\d+(?:\.\d+)*)', title_text)
+                section_neo4j_id = {}
+                if section_num_match:
+                    section_num = section_num_match.group(1)
+                    if section_num in neo4j_id:
+                        section_neo4j_id = {section_num: neo4j_id[section_num]}
 
                 new_section = {
                     "type": "section",
                     "id": self._generate_id(),
-                    "title": line.strip(),
-                    "content": []
+                    "title": title_text,
+                    "content": [],
+                    "neo4j_id": section_neo4j_id
                 }
 
                 while stack[-1]["level"] >= header_level:
@@ -748,7 +797,7 @@ def main():
             with open(input_path, 'r', encoding='utf-8') as f:
                 json_data = json.load(f)
 
-            result = parser_obj.parse_json(json_data)
+            result = parser_obj.parse_json(json_data, input_path)
         else:
             # 4b. Markdown 输入模式 (保持原有行为)
             with open(input_path, 'r', encoding='utf-8') as f:

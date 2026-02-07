@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ChevronDown, ChevronRight, FileText, Folder, PanelLeftClose, List } from 'lucide-react';
 import { WikiBlock } from '../types';
+import { WikiTheme, appleTheme } from '../config/wikiThemes';
 
 interface WikiPageNode {
   path: string;
@@ -22,6 +23,8 @@ interface WikiPageNavigatorProps {
   onToggleVisibility?: () => void;
   blocks?: WikiBlock[];
   onBlockClick?: (blockId: string) => void;
+  theme?: WikiTheme;
+  isDarkMode?: boolean;
 }
 
 /**
@@ -42,7 +45,8 @@ function buildPageTree(pages: string[]): WikiPageNode[] {
 
       if (!current[key]) {
         current[key] = {
-          path: '/' + parts.slice(0, index + 1).join('/'),
+          // 对于文件节点，使用原始路径以保持与 wikiPages 格式一致
+          path: isFile ? pagePath : '/' + parts.slice(0, index + 1).join('/'),
           name: part,
           children: isFile ? undefined : {}
         };
@@ -69,6 +73,17 @@ function buildPageTree(pages: string[]): WikiPageNode[] {
 }
 
 /**
+ * 检查某个页面路径是否在节点的子树中
+ */
+const isPageInSubtree = (node: WikiPageNode, pagePath: string): boolean => {
+  if (node.path === pagePath) return true;
+  if (node.children) {
+    return node.children.some(child => isPageInSubtree(child, pagePath));
+  }
+  return false;
+};
+
+/**
  * 树节点组件
  */
 const TreeNode: React.FC<{
@@ -76,11 +91,25 @@ const TreeNode: React.FC<{
   level: number;
   currentPage: string;
   onSelect: (path: string) => void;
-}> = ({ node, level, currentPage, onSelect }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
+  theme: WikiTheme;
+  isDarkMode?: boolean;
+}> = ({ node, level, currentPage, onSelect, theme, isDarkMode = false }) => {
   const isFolder = node.children && node.children.length > 0;
   const isActive = node.path === currentPage;
-  const isFile = !isFolder;
+
+  // 检查当前页面是否在此节点的子树中
+  const containsCurrentPage = useMemo(() => {
+    return isFolder && isPageInSubtree(node, currentPage);
+  }, [isFolder, node, currentPage]);
+
+  const [isExpanded, setIsExpanded] = useState(containsCurrentPage);
+
+  // 当 currentPage 变化且该页面在子树中时，自动展开
+  useEffect(() => {
+    if (containsCurrentPage) {
+      setIsExpanded(true);
+    }
+  }, [containsCurrentPage]);
 
   const handleClick = () => {
     if (isFolder) {
@@ -95,10 +124,10 @@ const TreeNode: React.FC<{
       <div
         onClick={handleClick}
         className={`
-          flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all
+          flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all
           ${isActive
-            ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-sm'
-            : 'hover:bg-gray-100 text-gray-700'
+            ? theme.navigator.activeItem
+            : `${theme.navigator.hoverBg} ${isDarkMode ? 'text-[#e6edf3]' : 'text-[#1d1d1f]'}`
           }
         `}
         style={{ paddingLeft: `${level * 12 + 12}px` }}
@@ -115,9 +144,9 @@ const TreeNode: React.FC<{
 
         <div className="flex-shrink-0">
           {isFolder ? (
-            <Folder size={16} className={isActive ? 'text-white' : 'text-orange-500'} />
+            <Folder size={16} className={isActive ? theme.navigator.activeIcon : theme.navigator.inactiveIcon} />
           ) : (
-            <FileText size={16} className={isActive ? 'text-white' : 'text-blue-500'} />
+            <FileText size={16} className={isActive ? theme.navigator.activeIcon : theme.navigator.inactiveIcon} />
           )}
         </div>
 
@@ -128,13 +157,15 @@ const TreeNode: React.FC<{
 
       {isFolder && isExpanded && node.children && (
         <div>
-          {node.children.map((child, index) => (
+          {node.children.map((child) => (
             <TreeNode
-              key={index}
+              key={child.path}
               node={child}
               level={level + 1}
               currentPage={currentPage}
               onSelect={onSelect}
+              theme={theme}
+              isDarkMode={isDarkMode}
             />
           ))}
         </div>
@@ -177,24 +208,27 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
   onPageSelect,
   onToggleVisibility,
   blocks = [],
-  onBlockClick
+  onBlockClick,
+  theme = appleTheme,
+  isDarkMode = false
 }) => {
-  const tree = buildPageTree(wikiPages);
+  // 缓存 tree 结构，避免每次渲染都重新生成
+  const tree = useMemo(() => buildPageTree(wikiPages), [wikiPages]);
   const [activeTab, setActiveTab] = useState<'pages' | 'structure'>('pages');
   const headings = extractHeadings(blocks);
 
   return (
-    <div className="bg-white rounded-2xl shadow-apple-card border border-white p-4 resize overflow-auto" style={{ width: 'fit-content', minWidth: 200, maxWidth: 400, minHeight: 200 }}>
-      <div className="mb-3 pb-3 border-b border-gray-100">
+    <div className="bg-transparent p-2 h-full w-full flex flex-col">
+      <div className={`flex-shrink-0 mb-3 pb-3 border-b ${theme.navigator.border}`}>
         <div className="flex items-center justify-between">
           {/* Tab 切换 */}
-          <div className="flex bg-gray-100 rounded-lg p-0.5">
+          <div className={`flex backdrop-blur-md rounded-xl p-0.5 border ${theme.navigator.border} ${isDarkMode ? 'bg-[#21262d]/60' : 'bg-white/40'}`}>
             <button
               onClick={() => setActiveTab('pages')}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
                 activeTab === 'pages'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? theme.navigator.tabActive
+                  : theme.navigator.tabInactive
               }`}
             >
               <Folder size={12} className="inline mr-1" />
@@ -202,10 +236,10 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('structure')}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
                 activeTab === 'structure'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? theme.navigator.tabActive
+                  : theme.navigator.tabInactive
               }`}
             >
               <List size={12} className="inline mr-1" />
@@ -215,7 +249,7 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
           {onToggleVisibility && (
             <button
               onClick={onToggleVisibility}
-              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-orange-600 transition-colors"
+              className={`p-1.5 rounded-lg ${theme.navigator.hoverBg} ${isDarkMode ? 'text-[#7d8590] hover:text-[#e6edf3]' : 'text-[#86868b] hover:text-[#1d1d1f]'} transition-colors`}
               title="隐藏导航"
             >
               <PanelLeftClose size={16} />
@@ -224,28 +258,37 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
         </div>
       </div>
 
-      <div className="space-y-1 max-h-[400px] overflow-y-auto">
+      <div className="flex-1 space-y-1 overflow-y-auto min-h-0">
         {activeTab === 'pages' ? (
-          tree.map((node, index) => (
+          tree.map((node) => (
             <TreeNode
-              key={index}
+              key={node.path}
               node={node}
               level={0}
               currentPage={currentPage}
               onSelect={onPageSelect}
+              theme={theme}
+              isDarkMode={isDarkMode}
             />
           ))
         ) : (
           headings.length > 0 ? (
             headings.map((heading) => {
               // 根据级别设置不同的字体大小和样式
-              const levelStyles: Record<number, string> = {
-                1: 'text-base font-semibold text-gray-900',
-                2: 'text-sm font-medium text-gray-800',
-                3: 'text-sm text-gray-700',
-                4: 'text-xs text-gray-600',
-                5: 'text-xs text-gray-500',
-                6: 'text-xs text-gray-400',
+              const levelStyles: Record<number, string> = isDarkMode ? {
+                1: 'text-base font-semibold text-[#e6edf3]',
+                2: 'text-sm font-medium text-[#e6edf3]',
+                3: 'text-sm text-[#c9d1d9]',
+                4: 'text-xs text-[#8b949e]',
+                5: 'text-xs text-[#7d8590]',
+                6: 'text-xs text-[#6e7681]',
+              } : {
+                1: 'text-base font-semibold text-[#1d1d1f]',
+                2: 'text-sm font-medium text-[#1d1d1f]',
+                3: 'text-sm text-[#3a3a3c]',
+                4: 'text-xs text-[#48484a]',
+                5: 'text-xs text-[#636366]',
+                6: 'text-xs text-[#86868b]',
               };
               const textStyle = levelStyles[heading.level] || levelStyles[3];
 
@@ -253,7 +296,7 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
                 <div
                   key={heading.id}
                   onClick={() => onBlockClick?.(heading.id)}
-                  className={`px-3 py-1.5 rounded-lg cursor-pointer hover:bg-gray-100 transition-all truncate ${textStyle}`}
+                  className={`px-3 py-1.5 rounded-xl cursor-pointer ${theme.navigator.hoverBg} transition-all truncate ${textStyle}`}
                   style={{ paddingLeft: `${(heading.level - 1) * 12 + 12}px` }}
                 >
                   {heading.title}
@@ -261,14 +304,14 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
               );
             })
           ) : (
-            <div className="text-sm text-gray-400 text-center py-4">暂无内容结构</div>
+            <div className={`text-sm text-center py-4 ${isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'}`}>暂无内容结构</div>
           )
         )}
       </div>
 
-      <div className="mt-3 pt-3 border-t border-gray-100">
-        <div className="text-xs text-gray-400 flex items-center gap-1">
-          <FileText size={12} />
+      <div className={`flex-shrink-0 mt-3 pt-3 border-t ${theme.navigator.border}`}>
+        <div className={`text-xs flex items-center gap-1 ${isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'}`}>
+          <FileText size={12} className={theme.navigator.inactiveIcon} />
           当前wiki页面: {currentPage.split('/').pop()?.replace('.json', '')}
         </div>
       </div>

@@ -39,7 +39,8 @@ export function parseWikiPageToBlocks(
           depth: depth,
           parentId: parentId,
           children: [], // 初始化子节点数组
-          isCollapsed: false // 默认展开
+          isCollapsed: false, // 默认展开
+          neo4jIds: item.neo4j_id && Object.keys(item.neo4j_id).length > 0 ? item.neo4j_id : undefined
         };
 
         // 递归处理子内容
@@ -151,7 +152,8 @@ export function parseWikiPageToBlocks(
               metadata,
               sourceInfo: sourceInfo || undefined,
               sourceIds: item.source_id,
-              sources: blockSources.length > 0 ? blockSources : undefined
+              sources: blockSources.length > 0 ? blockSources : undefined,
+              neo4jIds: item.neo4j_id && Object.keys(item.neo4j_id).length > 0 ? item.neo4j_id : undefined
             };
           }
         }

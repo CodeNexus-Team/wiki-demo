@@ -64,6 +64,9 @@ export interface WikiBlock {
   // Diff System Fields
   status?: 'original' | 'modified' | 'inserted' | 'deleted';
   originalContent?: string; // Store previous content for modified blocks
+
+  // Neo4j data source IDs
+  neo4jIds?: Neo4jIdMapping;
 }
 
 export interface BlockOperation {
@@ -111,13 +114,17 @@ export interface ExecuteWorkflowResponse {
   wiki_pages: string[];
 }
 
+// Neo4j ID 映射类型 - 键为章节号或节点ID，值为单个ID或ID数组
+export type Neo4jIdMapping = Record<string, string | string[]>;
+
 // Wiki 页面内容块
 export interface WikiPageContent {
   type: string;
   id: string;
   title?: string;
-  content?: WikiPageContent[] | { markdown: string };
+  content?: WikiPageContent[] | { markdown: string; mermaid?: string; mapping?: Record<string, string> };
   source_id?: string[];
+  neo4j_id?: Neo4jIdMapping;
 }
 
 // Wiki 源码引用

@@ -6,7 +6,6 @@ import { wikiPageCache } from '../services/wikiPageCache';
 import { parseMarkdownToBlocks, parseSingleBlockUpdate } from '../utils/markdownParser';
 import { parseWikiPageToBlocks } from '../utils/wikiContentParser';
 import { toggleBlockCollapse, insertBlockAfter, updateBlockContent } from '../utils/blockOperations';
-import { MOCK_REPO_FILES } from '../mock/sourceCode';
 
 // Hooks
 import {
@@ -18,6 +17,7 @@ import {
   useMermaidModal,
   useResizablePanel
 } from '../hooks';
+import { useWikiTheme } from '../hooks/useWikiTheme';
 
 // Components
 import SourceCodePanel from './SourceCodePanel';
@@ -34,7 +34,9 @@ import {
   ChevronUp,
   Bot,
   Cpu,
-  Check
+  Check,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 interface AnalysisViewProps {
@@ -43,6 +45,7 @@ interface AnalysisViewProps {
   setWikiHistory: React.Dispatch<React.SetStateAction<WikiHistoryRecord[]>>;
   selectedHistoryRecord: WikiHistoryRecord | null;
   onHistoryLoaded: () => void;
+  isSidebarCollapsed?: boolean;
 }
 
 const TITLE_MAP: Record<AnalysisType, string> = {
@@ -54,7 +57,10 @@ const TITLE_MAP: Record<AnalysisType, string> = {
   [AnalysisType.DATABASE]: '数据库模型',
 };
 
-const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiHistory, selectedHistoryRecord, onHistoryLoaded }) => {
+const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiHistory, selectedHistoryRecord, onHistoryLoaded, isSidebarCollapsed = false }) => {
+  // Theme
+  const { isDarkMode, toggleDarkMode } = useWikiTheme();
+
   // Local State
   const [isLoading, setIsLoading] = useState(false);
   const [prompt, setPrompt] = useState<string>('');
@@ -133,17 +139,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setIsDiffMode
   } = diffMode;
 
-  // Source panel with fallback location generator for Mermaid
-  const fallbackLocationGenerator = useCallback(() => {
-    const files = Object.keys(MOCK_REPO_FILES);
-    const randomFile = files[Math.floor(Math.random() * files.length)];
-    const fileContent = MOCK_REPO_FILES[randomFile];
-    const lineCount = fileContent.split('\n').length;
-    const randomLine = Math.floor(Math.random() * Math.max(1, lineCount - 10)) + 5;
-    return { file: randomFile, line: randomLine };
-  }, []);
-
-  const sourcePanel = useSourcePanel({ fallbackLocationGenerator });
+  const sourcePanel = useSourcePanel();
   const {
     isSourcePanelOpen,
     activeSourceLocation,
@@ -531,7 +527,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, selectedModel, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode]);
 
   return (
-    <div className="h-full relative flex flex-col bg-[#F5F5F7]">
+    <div className={`h-full relative flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0d1117]' : 'bg-[#F5F5F7]'}`}>
       {/* Mermaid Modal */}
       <MermaidModal
         isOpen={mermaidModalOpen}
@@ -562,18 +558,34 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       {/* Main Content Area */}
       <div
         ref={mainContentRef}
-        className="flex-1 overflow-y-auto scroll-smooth no-scrollbar w-full pb-[200px]"
+        className="flex-1 overflow-hidden w-full pb-[200px]"
         style={{ paddingRight: isSourcePanelOpen ? sourcePanelWidth : 0 }}
       >
         {!hasContent && (
-          <div className="min-h-[50vh] flex flex-col items-center justify-center px-6 animate-in fade-in duration-700 pt-10">
-            <div className="w-16 h-16 bg-gradient-to-tr from-[#0071E3] to-[#5AC8FA] rounded-[1.5rem] shadow-xl mb-6 flex items-center justify-center text-white">
+          <div className="min-h-[50vh] flex flex-col items-center justify-center px-6 animate-in fade-in duration-700 pt-10 relative">
+            {/* Dark Mode Toggle */}
+            <div className="absolute top-6 right-6">
+              <button
+                onClick={toggleDarkMode}
+                className={`flex items-center justify-center w-10 h-10 rounded-xl transition-colors ${
+                  isDarkMode
+                    ? 'bg-[#21262d] text-[#e6edf3] hover:bg-[#30363d]'
+                    : 'bg-white/60 text-[#86868b] hover:bg-white hover:text-[#1d1d1f] shadow-sm'
+                }`}
+                title={isDarkMode ? '切换到亮色模式' : '切换到暗色模式'}
+              >
+                {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+            </div>
+            <div className={`w-16 h-16 rounded-[1.5rem] shadow-xl mb-6 flex items-center justify-center text-white ${
+              isDarkMode ? 'bg-gradient-to-tr from-[#58a6ff] to-[#79c0ff]' : 'bg-gradient-to-tr from-[#0071E3] to-[#5AC8FA]'
+            }`}>
               <Sparkles size={32} />
             </div>
-            <h2 className="text-3xl font-semibold text-[#1d1d1f] mb-3 tracking-tight text-center">
+            <h2 className={`text-3xl font-semibold mb-3 tracking-tight text-center ${isDarkMode ? 'text-[#e6edf3]' : 'text-[#1d1d1f]'}`}>
               {TITLE_MAP[type]}
             </h2>
-            <p className="text-[#86868b] text-base font-light max-w-lg text-center leading-relaxed">
+            <p className={`text-base font-light max-w-lg text-center leading-relaxed ${isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'}`}>
               选择下方建议或输入指令，AI 将生成可交互的 WIKI 对象。
             </p>
           </div>
@@ -612,7 +624,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
       {/* Unified Chat Deck (Bottom Sheet) */}
       <div
-        className="fixed bottom-0 left-64 z-50 flex flex-col items-center transition-all duration-300 ease-apple-ease"
+        className={`fixed bottom-0 ${isSidebarCollapsed ? 'left-16' : 'left-64'} z-50 flex flex-col items-center transition-all duration-300 ease-apple-ease`}
         style={{ right: isSourcePanelOpen ? sourcePanelWidth : 0 }}
       >
         {/* Diff Confirmation Bar (Floating) */}
@@ -626,7 +638,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
         {/* Main Chat Container */}
         <div
-          className={`relative bg-white/85 backdrop-blur-xl shadow-[0_-10px_40px_rgba(0,0,0,0.08)] border border-white/50 flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${hasContent ? 'rounded-t-[2rem]' : 'rounded-[2rem] mb-10'} ${!isChatExpanded && hasContent ? 'translate-y-[calc(100%-110px)]' : 'translate-y-0'}`}
+          className={`relative backdrop-blur-xl border flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${hasContent ? 'rounded-t-[2rem]' : 'rounded-[2rem] mb-10'} ${!isChatExpanded && hasContent ? 'translate-y-[calc(100%-110px)]' : 'translate-y-0'} ${
+            isDarkMode
+              ? 'bg-[#161b22]/90 shadow-[0_-10px_40px_rgba(0,0,0,0.3)] border-[#30363d]'
+              : 'bg-white/85 shadow-[0_-10px_40px_rgba(0,0,0,0.08)] border-white/50'
+          }`}
           style={hasContent ? { width: chatWidth, height: isChatExpanded ? chatHeight : 110, maxHeight: '90vh', minWidth: 400, willChange: isChatDraggingRef.current ? 'width, height' : 'auto' } : { width: 768 }}
         >
           {/* Resize handles */}
@@ -644,7 +660,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
               className="w-full flex justify-center py-3 cursor-pointer hover:bg-black/5 transition-colors group"
               onClick={() => setIsChatExpanded(!isChatExpanded)}
             >
-              <div className="w-12 h-1.5 rounded-full bg-[#d2d2d7] group-hover:bg-[#aeaeb2] transition-colors" />
+              <div className={`w-12 h-1.5 rounded-full transition-colors ${isDarkMode ? 'bg-[#484f58] group-hover:bg-[#6e7681]' : 'bg-[#d2d2d7] group-hover:bg-[#aeaeb2]'}`} />
             </div>
           )}
 
@@ -689,12 +705,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           )}
 
           {/* Input Area */}
-          <div className="relative w-full p-4 bg-white/50 backdrop-blur-md border-t border-white/50">
+          <div className={`relative w-full p-4 backdrop-blur-md border-t ${
+            isDarkMode ? 'bg-[#0d1117]/50 border-[#30363d]' : 'bg-white/50 border-white/50'
+          }`}>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder={hasSelection ? "针对选中的内容，请输入您的修改建议..." : "描述分析需求..."}
-              className={`w-full bg-transparent outline-none resize-none text-[#1d1d1f] font-light placeholder:text-[#86868b]/50 transition-all duration-300 ${hasContent ? 'text-base min-h-[50px] max-h-[120px]' : 'text-lg min-h-[80px]'}`}
+              className={`w-full bg-transparent outline-none resize-none font-light transition-all duration-300 ${hasContent ? 'text-base min-h-[50px] max-h-[120px]' : 'text-lg min-h-[80px]'} ${
+                isDarkMode ? 'text-[#e6edf3] placeholder:text-[#7d8590]/50' : 'text-[#1d1d1f] placeholder:text-[#86868b]/50'
+              }`}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -709,9 +729,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 <div className="relative">
                   <button
                     onClick={() => setIsModelMenuOpen(!isModelMenuOpen)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-gray-100/50 hover:bg-gray-100 border border-gray-200/50 text-xs text-[#1d1d1f] transition-colors"
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs transition-colors ${
+                      isDarkMode
+                        ? 'bg-[#21262d]/50 hover:bg-[#21262d] border-[#30363d] text-[#e6edf3]'
+                        : 'bg-gray-100/50 hover:bg-gray-100 border-gray-200/50 text-[#1d1d1f]'
+                    }`}
                   >
-                    <Cpu size={12} className="text-[#0071E3]" />
+                    <Cpu size={12} className={isDarkMode ? 'text-[#58a6ff]' : 'text-[#0071E3]'} />
                     {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
                     <ChevronUp size={12} className={`text-gray-400 transition-transform ${isModelMenuOpen ? 'rotate-180' : ''}`} />
                   </button>
@@ -719,7 +743,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                   {isModelMenuOpen && (
                     <>
                       <div className="fixed inset-0 z-[100]" onClick={() => setIsModelMenuOpen(false)} />
-                      <div className="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-xl shadow-apple-hover border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-200 z-[101]">
+                      <div className={`absolute bottom-full left-0 mb-2 w-48 rounded-xl shadow-apple-hover border overflow-hidden animate-in fade-in zoom-in-95 duration-200 z-[101] ${
+                        isDarkMode ? 'bg-[#161b22] border-[#30363d]' : 'bg-white border-gray-100'
+                      }`}>
                         {AVAILABLE_MODELS.map(model => (
                           <button
                             key={model.id}
@@ -727,10 +753,18 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                               setSelectedModel(model.id);
                               setIsModelMenuOpen(false);
                             }}
-                            className={`w-full text-left px-4 py-2.5 text-xs flex items-center justify-between hover:bg-gray-50 transition-colors ${selectedModel === model.id ? 'text-[#0071E3] font-medium bg-blue-50/50' : 'text-[#1d1d1f]'}`}
+                            className={`w-full text-left px-4 py-2.5 text-xs flex items-center justify-between transition-colors ${
+                              selectedModel === model.id
+                                ? isDarkMode
+                                  ? 'text-[#58a6ff] font-medium bg-[#58a6ff]/10'
+                                  : 'text-[#0071E3] font-medium bg-blue-50/50'
+                                : isDarkMode
+                                  ? 'text-[#e6edf3] hover:bg-[#21262d]'
+                                  : 'text-[#1d1d1f] hover:bg-gray-50'
+                            }`}
                           >
                             {model.name}
-                            {selectedModel === model.id && <Check size={12} className="text-[#0071E3]" />}
+                            {selectedModel === model.id && <Check size={12} className={isDarkMode ? 'text-[#58a6ff]' : 'text-[#0071E3]'} />}
                           </button>
                         ))}
                       </div>
@@ -743,7 +777,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 {prompt && !isLoading && (
                   <button
                     onClick={() => setPrompt('')}
-                    className="p-2 text-[#86868b] hover:text-[#1d1d1f] hover:bg-gray-100 rounded-full transition-colors"
+                    className={`p-2 rounded-full transition-colors ${
+                      isDarkMode
+                        ? 'text-[#7d8590] hover:text-[#e6edf3] hover:bg-[#21262d]'
+                        : 'text-[#86868b] hover:text-[#1d1d1f] hover:bg-gray-100'
+                    }`}
                   >
                     <Eraser size={16} />
                   </button>
@@ -751,7 +789,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 <button
                   onClick={handleAnalyze}
                   disabled={!prompt.trim() || isLoading}
-                  className="bg-[#0071E3] hover:bg-[#0077ED] disabled:bg-[#e5e5ea] disabled:text-[#86868b] text-white rounded-full flex items-center justify-center transition-all duration-200 shadow-md w-8 h-8"
+                  className={`text-white rounded-full flex items-center justify-center transition-all duration-200 shadow-md w-8 h-8 ${
+                    isDarkMode
+                      ? 'bg-[#238636] hover:bg-[#2ea043] disabled:bg-[#21262d] disabled:text-[#484f58]'
+                      : 'bg-[#0071E3] hover:bg-[#0077ED] disabled:bg-[#e5e5ea] disabled:text-[#86868b]'
+                  }`}
                 >
                   {isLoading ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} strokeWidth={3} />}
                 </button>
@@ -768,7 +810,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 <button
                   key={i}
                   onClick={() => setPrompt(s)}
-                  className="text-left px-4 py-3 bg-white/60 hover:bg-white border border-gray-200/50 hover:border-blue-200 rounded-xl text-xs text-gray-600 hover:text-[#0071E3] transition-all shadow-sm hover:shadow-md"
+                  className={`text-left px-4 py-3 border rounded-xl text-xs transition-all shadow-sm hover:shadow-md ${
+                    isDarkMode
+                      ? 'bg-[#21262d]/60 hover:bg-[#21262d] border-[#30363d] hover:border-[#58a6ff]/50 text-[#7d8590] hover:text-[#58a6ff]'
+                      : 'bg-white/60 hover:bg-white border-gray-200/50 hover:border-blue-200 text-gray-600 hover:text-[#0071E3]'
+                  }`}
                 >
                   {s}
                 </button>
