@@ -2,8 +2,8 @@
 
 > 智能代码分析与可视化 WIKI 系统 - 完整开发指南
 
-**版本**: v2.0
-**最后更新**: 2026-01-22
+**版本**: v2.4
+**最后更新**: 2026-02-08
 
 ---
 
@@ -22,6 +22,7 @@
 - [Mermaid 节点映射解析](#mermaid-节点映射解析)
 - [导航栏大纲视图](#导航栏大纲视图)
 - [Wiki 生成历史管理](#wiki-生成历史管理)
+- [Wiki 页面多标签页](#wiki-页面多标签页)
 - [开发指南](#开发指南)
 - [故障排查](#故障排查)
 
@@ -42,6 +43,7 @@ CodeNexus.AI 是一个基于 AI 的代码分析和文档生成工具，支持双
 | 交互式图表 | Mermaid 图表节点可直接关联源代码位置，点击后高亮对应节点并自动居中 |
 | 实时 Diff 系统 | 可视化展示新增、修改、删除的内容 |
 | 多页面导航 | 支持多 Wiki 页面的树形导航和切换，大纲视图按标题层级显示 |
+| 页面标签栏 | VSCode 风格的页面标签栏，支持多页面快速切换、关闭，每个标签保持独立状态 |
 | 可调整布局 | 聊天面板、导航栏、源代码面板均支持拖拽调整大小，内容区域自适应 |
 | 源代码联动 | 查看源代码时自动高亮对应的 WikiBlock 和 Mermaid 节点 |
 | 历史记录管理 | 自动保存生成历史，支持快速恢复、删除和清空，侧边栏一键访问 |
@@ -87,6 +89,7 @@ codewiki-ai/
 │   ├── WikiBlock.tsx             # 原子块渲染器（支持递归、折叠、三点菜单、高亮、Neo4j ID 卡片）
 │   ├── WikiPageNavigator.tsx     # 多页面树形导航器（可调整大小、结构导航、层级标题）
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板（侧边栏滑入）
+│   ├── PageTabBar.tsx            # Wiki 页面标签栏（v2.3 新增，VSCode 风格多标签页）
 │   ├── Mermaid.tsx               # Mermaid 图表封装（支持节点高亮、subgraph 高亮、Neo4j ID 显示）
 │   ├── SourceCodePanel.tsx       # 源代码阅读器（可调整宽度、联动高亮）
 │   ├── QuestionSelector.tsx      # CodeNexus 问题选择器（可调整大小）
@@ -117,6 +120,7 @@ codewiki-ai/
 │   ├── useSourcePanel.ts         # 源代码面板状态
 │   ├── useWikiPages.ts           # Wiki 页面导航
 │   ├── useWikiTheme.ts           # Wiki 主题管理（v2.2 新增）
+│   ├── usePageTabs.ts            # Wiki 页面标签管理（v2.3 新增）
 │   ├── useMermaidModal.ts        # Mermaid 模态框（仅 AnalysisView）
 │   ├── useResizablePanel.ts      # 通用可调整大小面板
 │   └── index.ts
@@ -153,6 +157,7 @@ App
 └── <main>
     ├── Dashboard (仪表盘)
     └── AnalysisView (分析视图)
+        ├── PageTabBar (页面标签栏，v2.3 新增)
         ├── WikiPageNavigator (多页面导航)
         ├── WikiBlockRenderer[] (原子块渲染)
         │   ├── Mermaid (图表)
@@ -248,7 +253,14 @@ interface WikiBlock {
   parentId?: string;        // 父节点ID
   depth?: number;           // 深度（用于缩进）
   isCollapsed?: boolean;    // 折叠状态
+
+  // Neo4j 关联字段
+  neo4jIds?: Neo4jIdMapping;    // Neo4j 节点 ID 映射
+  neo4jSource?: Neo4jIdMapping; // Neo4j 节点名称映射（从数据库查询）
 }
+
+// Neo4j ID 映射类型
+type Neo4jIdMapping = Record<string, string | string[]>;
 ```
 
 ### 核心工具函数
@@ -1530,6 +1542,217 @@ const levelStyles: Record<number, string> = {
 
 ---
 
+## Wiki 页面多标签页
+
+### 概述
+
+v2.3 版本新增了 VSCode 风格的页面标签栏功能，允许用户同时打开多个 Wiki 页面，通过标签快速切换，每个标签保持独立的状态（滚动位置、选中块等）。
+
+### 架构设计
+
+#### 数据结构
+
+```typescript
+// types.ts
+interface PageTab {
+  id: string;                     // 唯一标识（使用 pagePath）
+  pagePath: string;               // Wiki 页面路径
+  title: string;                  // 显示标题（从 pagePath 提取文件名）
+}
+
+interface PageTabState {
+  blocks: WikiBlock[];            // 页面内容
+  scrollPosition: number;         // 滚动位置
+  selectedBlockIds: Set<string>;  // 选中的块
+}
+```
+
+#### usePageTabs Hook
+
+```typescript
+// hooks/usePageTabs.ts
+interface UsePageTabsReturn {
+  tabs: PageTab[];
+  activeTabId: string | null;
+
+  openTab: (pagePath: string, blocks?: WikiBlock[]) => void;
+  closeTab: (tabId: string) => void;
+  switchTab: (tabId: string) => Promise<void>;
+
+  updateTabState: (tabId: string, state: Partial<PageTabState>) => void;
+  getTabState: (tabId: string) => PageTabState | undefined;
+
+  saveCurrentTabState: (blocks: WikiBlock[], selectedBlockIds: Set<string>) => void;
+
+  clearTabs: () => void;
+}
+```
+
+### 功能特性
+
+#### 1. 标签创建
+
+标签在以下场景自动创建：
+- 从 WikiPageNavigator 点击页面
+- 工作流执行完成后（CodeNexus 模式）
+- 历史记录加载时
+- Gemini 模式生成内容时（使用虚拟路径）
+
+```typescript
+// 打开新页面时创建标签
+const handlePageSwitch = async (pagePath: string) => {
+  if (activeTabId) {
+    saveCurrentTabState(blocks, selectedBlockIds);
+  }
+
+  const existingTab = tabs.find(t => t.pagePath === pagePath);
+  if (existingTab) {
+    await switchTab(existingTab.id);
+    // 恢复状态...
+    return;
+  }
+
+  const newBlocks = await handlePageSwitchBase(pagePath);
+  if (newBlocks) {
+    setBlocks(newBlocks);
+    openTab(pagePath, newBlocks);
+  }
+};
+```
+
+#### 2. 标签切换
+
+点击标签时保存当前状态并恢复目标标签状态：
+
+```typescript
+const handleTabClick = async (tabId: string) => {
+  if (tabId === activeTabId) return;
+
+  // 保存当前标签状态
+  if (activeTabId) {
+    saveCurrentTabState(blocks, selectedBlockIds);
+  }
+
+  // 恢复目标标签状态
+  const cachedState = getTabState(tabId);
+  if (cachedState) {
+    setBlocks(cachedState.blocks);
+    setSelectedBlockIds(cachedState.selectedBlockIds);
+    setCurrentPagePath(targetTab.pagePath);
+  }
+
+  await switchTab(tabId);
+};
+```
+
+#### 3. 标签关闭
+
+关闭标签时自动切换到相邻标签：
+
+```typescript
+const handleTabClose = (tabId: string) => {
+  if (tabs.length <= 1) return;  // 最后一个标签不可关闭
+
+  const tabIndex = tabs.findIndex(t => t.id === tabId);
+  closeTab(tabId);
+
+  // 如果关闭的是当前标签，切换到相邻标签
+  if (tabId === activeTabId && tabs.length > 1) {
+    const newActiveIndex = Math.min(tabIndex, tabs.length - 2);
+    const newActiveTab = tabs.filter(t => t.id !== tabId)[newActiveIndex];
+    // 恢复新活跃标签的状态...
+  }
+};
+```
+
+### PageTabBar 组件
+
+```typescript
+// components/PageTabBar.tsx
+interface PageTabBarProps {
+  tabs: PageTab[];
+  activeTabId: string | null;
+  onTabClick: (tabId: string) => void;
+  onTabClose: (tabId: string) => void;
+  isDarkMode?: boolean;
+}
+```
+
+#### 样式设计
+
+遵循 Apple 风格设计，支持明暗主题：
+
+```tsx
+// 标签栏容器
+<div className={`
+  h-9 flex items-center px-2 gap-1 overflow-x-auto flex-shrink-0 border-b
+  ${isDarkMode
+    ? 'bg-[#161b22] border-[#30363d]'
+    : 'bg-[#F5F5F7]/60 border-[#d2d2d7]/50'}
+`}>
+
+// 单个标签
+<div className={`
+  flex items-center gap-2 px-3 py-1.5 rounded-lg
+  transition-all duration-200 cursor-pointer group max-w-[180px] min-w-0
+  ${isActive
+    ? isDarkMode
+      ? 'bg-[#21262d] text-[#e6edf3]'
+      : 'bg-white text-[#1d1d1f] shadow-sm'
+    : isDarkMode
+      ? 'text-[#7d8590] hover:bg-[#21262d]/50 hover:text-[#e6edf3]'
+      : 'text-[#86868b] hover:bg-white/50 hover:text-[#1d1d1f]'}
+`}>
+```
+
+### 状态管理
+
+使用 `useRef` 存储标签状态缓存，避免不必要的重渲染：
+
+```typescript
+// hooks/usePageTabs.ts
+const tabStatesRef = useRef<Map<string, PageTabState>>(new Map());
+
+const saveCurrentTabState = useCallback((blocks, selectedBlockIds) => {
+  if (!activeTabId) return;
+  const scrollPosition = getScrollPosition?.() ?? 0;
+
+  tabStatesRef.current.set(activeTabId, {
+    blocks,
+    scrollPosition,
+    selectedBlockIds,
+  });
+}, [activeTabId, getScrollPosition]);
+```
+
+### 与现有功能集成
+
+#### WikiPageNavigator 集成
+
+WikiPageNavigator 点击页面时通过 `handlePageSwitch` 自动创建/切换标签。
+
+#### 工作流集成
+
+CodeNexus 工作流完成后清空现有标签，为首页创建新标签：
+
+```typescript
+// handleQuestionConfirm
+clearTabs();
+openTab(firstPage, parsedBlocks);
+```
+
+#### 历史记录集成
+
+加载历史记录时同样创建对应标签：
+
+```typescript
+// loadHistoryRecord
+clearTabs();
+openTab(pagePath, parsedBlocks);
+```
+
+---
+
 ## 故障排查
 
 ### 问题 1: CodeNexus 无响应
@@ -1941,30 +2164,39 @@ const MyComponent = () => {
 
 主题选择会自动保存到 `localStorage`，键名为 `wiki-theme`。页面刷新后会自动恢复上次选择的主题。
 
-### Neo4j ID 卡片
+### Neo4j Source 卡片
 
-Neo4j ID 卡片显示与 Mermaid 节点关联的 Neo4j 数据库 ID，支持：
+Neo4j Source 卡片显示与 Mermaid 节点关联的 Neo4j 数据库节点名称（从后端查询），支持：
 
-- **大卡片布局**：横向排列，"Neo4j Source" 标签后跟 ID 小标签
+- **大卡片布局**：横向排列，"Neo4j Source" 标签后跟节点名称标签
 - **主题适配**：样式随主题变化
-- **交互高亮**：点击 ID 标签可高亮对应的 Mermaid 节点
+- **交互高亮**：点击名称标签可高亮对应的 Mermaid 节点
+- **后端查询**：名称通过后端从 Neo4j 数据库查询 `n.name` 字段获取
 
 ```tsx
 // components/WikiBlock.tsx
-const renderNeo4jIdCard = (neo4jIds: Neo4jIdMapping | undefined, isMermaid: boolean = false) => {
+const renderNeo4jIdCard = (
+  neo4jIds: Neo4jIdMapping | undefined,
+  neo4jSource: Neo4jIdMapping | undefined,
+  isMermaid: boolean = false
+) => {
+  // 优先使用 neo4jSource（节点名称），如果没有则不显示
+  const displayData = neo4jSource && Object.keys(neo4jSource).length > 0 ? neo4jSource : null;
+  if (!displayData) return null;
+
   return (
     <div className={theme.neo4jCard.container}>
       <span className={theme.neo4jCard.label}>
         <Database size={12} className={theme.neo4jCard.labelIcon} />
         Neo4j Source
       </span>
-      {idArray.map(id => (
+      {nameArray.map(name => (
         <span
-          key={id}
+          key={name}
           className={`${theme.neo4jCard.idTag} ${isActive ? theme.neo4jCard.idTagActive : ''}`}
-          onClick={() => handleIdClick(id)}
+          onClick={() => handleNameClick(name)}
         >
-          {id}
+          {name}
         </span>
       ))}
     </div>
@@ -1972,24 +2204,65 @@ const renderNeo4jIdCard = (neo4jIds: Neo4jIdMapping | undefined, isMermaid: bool
 };
 ```
 
-### Mermaid 右键菜单 Neo4j ID 显示
+#### 后端 Neo4j 查询
 
-右键点击 Mermaid 节点时，如果该节点有关联的 Neo4j ID，会在菜单底部显示：
+后端 `markdown_parser.py` 在解析时自动查询 Neo4j 数据库，将 `neo4j_id` 映射为 `neo4j_source`：
+
+```python
+# markdown_parser.py
+def _query_neo4j_name(self, node_id):
+    """根据 neo4j 节点 ID 查询对应的 name 字段"""
+    driver = self._get_neo4j_driver()
+    with driver.session() as session:
+        # 数字 ID 使用 id()，字符串 ID 使用 elementId()
+        result = session.run(
+            "MATCH (n) WHERE id(n) = $node_id RETURN n.name AS name",
+            node_id=int(node_id)
+        )
+        record = result.single()
+        return record["name"] if record else None
+
+def _build_neo4j_source(self, neo4j_id):
+    """根据 neo4j_id 映射构建 neo4j_source 映射"""
+    neo4j_source = {}
+    for key, node_id in neo4j_id.items():
+        if isinstance(node_id, list):
+            names = [self._query_neo4j_name(str(nid)) for nid in node_id]
+            neo4j_source[key] = [n for n in names if n]
+        else:
+            name = self._query_neo4j_name(str(node_id))
+            if name:
+                neo4j_source[key] = name
+    return neo4j_source
+```
+
+Neo4j 连接配置在 `MarkdownToJsonParser` 类中：
+- `NEO4J_URI`: 数据库连接地址
+- `NEO4J_USER`: 用户名
+- `NEO4J_PASSWORD`: 密码
+
+### Mermaid 右键菜单 Neo4j Source 显示
+
+右键点击 Mermaid 节点时，如果该节点有关联的 Neo4j Source（节点名称），会在菜单底部显示：
 
 ```tsx
 // components/Mermaid.tsx
-{neo4jIds?.[activeNodeId] && (
+{neo4jSource?.[activeNodeId] && (
   <div className="px-3 py-2.5 text-xs border-t border-gray-100 flex items-center gap-2 bg-blue-50/50">
     <Database size={14} className="text-blue-600" />
-    <span className="text-gray-500">Neo4j ID:</span>
-    <span className="font-mono text-blue-600">{neo4jIds[activeNodeId]}</span>
+    <span className="text-gray-500">Neo4j Source:</span>
+    <span className="font-mono text-blue-600">
+      {Array.isArray(neo4jSource[activeNodeId])
+        ? (neo4jSource[activeNodeId] as string[]).join(', ')
+        : neo4jSource[activeNodeId]}
+    </span>
   </div>
 )}
 ```
 
 **右键菜单显示条件**：
 - 有 `sourceMapping` → 显示"定位源代码位置"按钮
-- 有 `neo4jIds` → 显示 Neo4j ID 信息
+- 有 `neo4jSource` → 显示 Neo4j Source 信息（节点名称）
 - 两者都没有 → 不显示右键菜单
 
 ---
@@ -1998,6 +2271,8 @@ const renderNeo4jIdCard = (neo4jIds: Neo4jIdMapping | undefined, isMermaid: bool
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v2.4 | 2026-02-08 | **Neo4j Source 显示**：后端 `markdown_parser.py` 新增 Neo4j 数据库查询功能，将 `neo4j_id` 转换为 `neo4j_source`（节点名称）；前端 `WikiBlock.tsx` 和 `Mermaid.tsx` 显示节点名称而非 ID；`types.ts` 和 `wikiContentParser.ts` 添加 `neo4jSource` 字段支持 |
+| v2.3 | 2026-02-07 | **Wiki 页面多标签页**：新增 VSCode 风格页面标签栏（PageTabBar 组件）、usePageTabs Hook 管理标签状态、支持多页面快速切换、每个标签保持独立状态（blocks、scrollPosition、selectedBlockIds）、标签关闭自动切换相邻标签、与 WikiPageNavigator/工作流/历史记录集成 |
 | v2.2 | 2026-01-28 | **主题系统与 Mermaid 增强**：新增 Wiki 主题系统（Apple/GitHub/Notion/Technical 四套主题）、useWikiTheme Hook、config/wikiThemes.ts 配置文件、Neo4j ID 卡片样式随主题变化、Mermaid subgraph 高亮支持、右键菜单显示 Neo4j ID、移除 useSourcePanel 的 fallbackLocationGenerator |
 | v2.1 | 2026-01-23 | 组件重构：提取 7 个自定义 Hooks（useBlockSelection、useDiffMode、useChatHistory、useSourcePanel、useWikiPages、useMermaidModal、useResizablePanel）、新建 chat/wiki/mermaid 组件目录、ChatPanel/WikiContent/MermaidModal 等共享组件、主视图代码量减少 51%（2445行→1197行） |
 | v2.0 | 2026-01-22 | 变更预览工作流重构：预览与应用分离、添加 `/api/apply_changes` 接口、`pendingPageDiff` 状态管理、Mermaid 删除状态视觉效果（X 线+标签）、前后端块插入逻辑统一（section→子节点，其他→兄弟节点）、后端函数重构（fetch_page/apply_changes 移至 server.py 作为真实实现） |

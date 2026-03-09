@@ -15,12 +15,14 @@ import {
   useSourcePanel,
   useWikiPages,
   useMermaidModal,
-  useResizablePanel
+  useResizablePanel,
+  usePageTabs
 } from '../hooks';
 import { useWikiTheme } from '../hooks/useWikiTheme';
 
 // Components
 import SourceCodePanel from './SourceCodePanel';
+import PageTabBar from './PageTabBar';
 import QuestionSelector from './QuestionSelector';
 import { ChatMessage, DiffConfirmBar, SelectionBar } from './chat';
 import { WikiContent } from './wiki';
@@ -121,7 +123,29 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setCurrentPagePath,
     setIsNavigatorVisible,
     handlePageSwitch: handlePageSwitchBase,
+    loadPage,
   } = wikiPagesHook;
+
+  // Page Tabs
+  const pageTabs = usePageTabs({
+    getScrollPosition: () => mainContentRef.current?.scrollTop ?? 0,
+    setScrollPosition: (pos) => {
+      if (mainContentRef.current) {
+        mainContentRef.current.scrollTop = pos;
+      }
+    },
+  });
+  const {
+    tabs,
+    activeTabId,
+    openTab,
+    closeTab,
+    switchTab,
+    updateTabState,
+    getTabState,
+    saveCurrentTabState,
+    clearTabs,
+  } = pageTabs;
 
   const diffMode = useDiffMode({
     blocks,
@@ -226,6 +250,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         if (wikiPage) {
           const parsedBlocks = parseWikiPageToBlocks(wikiPage.content, wikiPage.source);
           setBlocks(parsedBlocks);
+          // Create tab for loaded history page
+          clearTabs();
+          openTab(pagePath, parsedBlocks);
         } else if (selectedHistoryRecord.blocks) {
           setBlocks(selectedHistoryRecord.blocks);
         } else {
@@ -247,7 +274,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     };
 
     loadHistoryRecord();
-  }, [selectedHistoryRecord, onHistoryLoaded, setCurrentPagePath, setWikiPages, setSelectedBlockIds, setIsDiffMode, setIsChatExpanded]);
+  }, [selectedHistoryRecord, onHistoryLoaded, setCurrentPagePath, setWikiPages, setSelectedBlockIds, setIsDiffMode, setIsChatExpanded, clearTabs, openTab]);
 
   // Reset state on type change
   useEffect(() => {
@@ -296,11 +323,77 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   }, []);
 
   const handlePageSwitch = useCallback(async (pagePath: string) => {
+    // Save current tab state before switching
+    if (activeTabId) {
+      saveCurrentTabState(blocks, selectedBlockIds);
+    }
+
+    // Check if tab already exists
+    const existingTab = tabs.find(t => t.pagePath === pagePath);
+    if (existingTab) {
+      // Switch to existing tab and restore state
+      await switchTab(existingTab.id);
+      const cachedState = getTabState(existingTab.id);
+      if (cachedState) {
+        setBlocks(cachedState.blocks);
+        setSelectedBlockIds(cachedState.selectedBlockIds);
+        setCurrentPagePath(pagePath);
+      }
+      return;
+    }
+
+    // Load new page and create tab
     const newBlocks = await handlePageSwitchBase(pagePath);
     if (newBlocks) {
       setBlocks(newBlocks);
+      openTab(pagePath, newBlocks);
     }
-  }, [handlePageSwitchBase]);
+  }, [handlePageSwitchBase, activeTabId, tabs, saveCurrentTabState, switchTab, getTabState, openTab, blocks, selectedBlockIds, setCurrentPagePath]);
+
+  const handleTabClick = useCallback(async (tabId: string) => {
+    if (tabId === activeTabId) return;
+
+    // Save current tab state
+    if (activeTabId) {
+      saveCurrentTabState(blocks, selectedBlockIds);
+    }
+
+    // Restore target tab state
+    const cachedState = getTabState(tabId);
+    if (cachedState) {
+      setBlocks(cachedState.blocks);
+      setSelectedBlockIds(cachedState.selectedBlockIds);
+      const targetTab = tabs.find(t => t.id === tabId);
+      if (targetTab) {
+        setCurrentPagePath(targetTab.pagePath);
+      }
+    }
+
+    await switchTab(tabId);
+  }, [activeTabId, tabs, saveCurrentTabState, getTabState, switchTab, blocks, selectedBlockIds, setCurrentPagePath]);
+
+  const handleTabClose = useCallback((tabId: string) => {
+    if (tabs.length <= 1) return;
+
+    const tabIndex = tabs.findIndex(t => t.id === tabId);
+    const isActiveTab = tabId === activeTabId;
+
+    closeTab(tabId);
+
+    // If closing active tab, switch to adjacent tab
+    if (isActiveTab && tabs.length > 1) {
+      const newActiveIndex = Math.min(tabIndex, tabs.length - 2);
+      const newActiveTab = tabs.filter(t => t.id !== tabId)[newActiveIndex];
+      if (newActiveTab) {
+        const cachedState = getTabState(newActiveTab.id);
+        if (cachedState) {
+          setBlocks(cachedState.blocks);
+          setSelectedBlockIds(cachedState.selectedBlockIds);
+          setCurrentPagePath(newActiveTab.pagePath);
+        }
+      }
+    }
+  }, [tabs, activeTabId, closeTab, getTabState, setCurrentPagePath]);
 
   const handleMermaidNodeClick = useCallback((nodeId: string, metadata?: MermaidMetadata, blockId?: string) => {
     baseMermaidNodeClick(nodeId, metadata, blockId);
@@ -354,6 +447,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
       const parsedBlocks = parseWikiPageToBlocks(wikiPage.content, wikiPage.source);
       setBlocks(parsedBlocks);
+
+      // Clear existing tabs and create new tab for the first page
+      clearTabs();
+      openTab(firstPage, parsedBlocks);
 
       requestAnimationFrame(() => {
         window.scrollTo({ top: 0, behavior: 'instant' });
@@ -426,6 +523,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             setWikiPages(prev => [...prev, response.new_page_path]);
             setCurrentPagePath(response.new_page_path);
             setBlocks(parsedBlocks);
+
+            // Create tab for new page
+            openTab(response.new_page_path, parsedBlocks);
 
             finalContent = `已创建新页面：${response.new_page_path}\n\n包含 ${parsedBlocks.length} 个对象。`;
           } else {
@@ -511,6 +611,12 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         const parsedBlocks = parseMarkdownToBlocks(resultText);
         setBlocks(parsedBlocks);
         setIsDiffMode(false);
+
+        // Create tab for generated content (use a virtual path based on type)
+        const virtualPath = `/${type.toLowerCase()}/generated-${Date.now()}.json`;
+        clearTabs();
+        openTab(virtualPath, parsedBlocks);
+
         finalContent = `已生成 ${TITLE_MAP[type]} 的完整分析报告，包含 ${parsedBlocks.length} 个交互式对象。`;
         saveToHistory(currentPrompt, parsedBlocks);
       }
@@ -524,7 +630,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, selectedModel, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode]);
+  }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, selectedModel, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode, openTab, clearTabs]);
 
   return (
     <div className={`h-full relative flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0d1117]' : 'bg-[#F5F5F7]'}`}>
@@ -592,32 +698,56 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         )}
 
         {blocks.length > 0 && (
-          <div className="px-4 md:px-12 pt-8">
-            <WikiContent
-              blocks={blocks}
-              selectedBlockIds={selectedBlockIds}
-              isDiffMode={isDiffMode}
-              isLoadingPage={isLoadingPage}
-              onToggleSelect={toggleBlockSelection}
-              onToggleCollapse={handleToggleCollapse}
-              onMermaidNodeClick={handleMermaidNodeClick}
-              onSourceClick={handleSourceClick}
-              onMermaidDoubleClick={handleMermaidDoubleClick}
-              highlightedBlockId={highlightedBlockId}
-              highlightedMermaidNodeId={highlightedMermaidNodeId}
-              wikiPages={wikiPages}
-              currentPagePath={currentPagePath}
-              isNavigatorVisible={isNavigatorVisible}
-              onPageSwitch={handlePageSwitch}
-              onToggleNavigator={() => setIsNavigatorVisible(!isNavigatorVisible)}
-              onBlockClick={(blockId) => {
-                document.getElementById(blockId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              headerLabel="交互式代码Wiki"
-              headerIcon="sparkles"
-              variant="blue"
-            />
-            <div ref={contentEndRef} />
+          <div className="flex flex-col flex-1 min-h-0 px-4 md:px-12 pt-6">
+            {/* Unified Card Container */}
+            <div className={`
+              flex flex-col flex-1 min-h-0 rounded-xl border backdrop-blur-xl overflow-hidden
+              ${isDarkMode
+                ? 'bg-[#0d1117]/90 border-[#30363d]'
+                : 'bg-white/20 border-white/30'
+              }
+            `}>
+              {/* Page Tab Bar - Card Header */}
+              {tabs.length > 0 && (
+                <PageTabBar
+                  tabs={tabs}
+                  activeTabId={activeTabId}
+                  onTabClick={handleTabClick}
+                  onTabClose={handleTabClose}
+                  isDarkMode={isDarkMode}
+                />
+              )}
+
+              {/* Wiki Content - Card Body */}
+              <div className="flex-1 overflow-auto">
+                <WikiContent
+                  blocks={blocks}
+                  selectedBlockIds={selectedBlockIds}
+                  isDiffMode={isDiffMode}
+                  isLoadingPage={isLoadingPage}
+                  onToggleSelect={toggleBlockSelection}
+                  onToggleCollapse={handleToggleCollapse}
+                  onMermaidNodeClick={handleMermaidNodeClick}
+                  onSourceClick={handleSourceClick}
+                  onMermaidDoubleClick={handleMermaidDoubleClick}
+                  highlightedBlockId={highlightedBlockId}
+                  highlightedMermaidNodeId={highlightedMermaidNodeId}
+                  wikiPages={wikiPages}
+                  currentPagePath={currentPagePath}
+                  isNavigatorVisible={isNavigatorVisible}
+                  onPageSwitch={handlePageSwitch}
+                  onToggleNavigator={() => setIsNavigatorVisible(!isNavigatorVisible)}
+                  onBlockClick={(blockId) => {
+                    document.getElementById(blockId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  headerLabel="交互式代码Wiki"
+                  headerIcon="sparkles"
+                  variant="blue"
+                  noBorder
+                />
+                <div ref={contentEndRef} />
+              </div>
+            </div>
           </div>
         )}
       </div>

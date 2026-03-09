@@ -83,6 +83,8 @@ def main():
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=4, ensure_ascii=False)
 
+        # 关闭 Neo4j 连接
+        parser_obj.close()
         print("Conversion complete!")
 
     # Set wiki_result path as environment variable for the server to use

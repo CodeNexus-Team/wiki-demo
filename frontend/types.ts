@@ -67,6 +67,8 @@ export interface WikiBlock {
 
   // Neo4j data source IDs
   neo4jIds?: Neo4jIdMapping;
+  // Neo4j node names (resolved from neo4jIds)
+  neo4jSource?: Neo4jIdMapping;
 }
 
 export interface BlockOperation {
@@ -125,6 +127,7 @@ export interface WikiPageContent {
   content?: WikiPageContent[] | { markdown: string; mermaid?: string; mapping?: Record<string, string> };
   source_id?: string[];
   neo4j_id?: Neo4jIdMapping;
+  neo4j_source?: Neo4jIdMapping;
 }
 
 // Wiki 源码引用
@@ -182,4 +185,18 @@ export interface WikiHistoryRecord {
   blocksCount?: number; // 用于显示的块数量
   // blocks 字段已废弃，改为从缓存中获取页面数据
   blocks?: WikiBlock[];
+}
+
+// --- Page Tab Types (VSCode-style tabs) ---
+
+export interface PageTab {
+  id: string;                     // 唯一标识（使用 pagePath）
+  pagePath: string;               // Wiki 页面路径
+  title: string;                  // 显示标题（从 pagePath 提取文件名）
+}
+
+export interface PageTabState {
+  blocks: WikiBlock[];            // 页面内容
+  scrollPosition: number;         // 滚动位置
+  selectedBlockIds: Set<string>;  // 选中的块
 }

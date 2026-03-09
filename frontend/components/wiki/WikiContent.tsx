@@ -38,6 +38,9 @@ interface WikiContentProps {
 
   // Theme
   variant?: 'blue' | 'orange';
+
+  // Layout
+  noBorder?: boolean;
 }
 
 export const WikiContent: React.FC<WikiContentProps> = ({
@@ -62,6 +65,7 @@ export const WikiContent: React.FC<WikiContentProps> = ({
   headerIcon = 'sparkles',
   headerBadge,
   variant = 'blue',
+  noBorder = false,
 }) => {
   const hasMultiplePages = wikiPages.length > 1;
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
@@ -115,13 +119,14 @@ export const WikiContent: React.FC<WikiContentProps> = ({
     <div
       ref={containerRef}
       className={`
-      backdrop-blur-xl rounded-xl border min-h-[70vh] max-h-[calc(100vh-4rem)] animate-in fade-in duration-300
+      backdrop-blur-xl min-h-[70vh] max-h-[calc(100vh-4rem)] animate-in fade-in duration-300
+      ${noBorder ? '' : 'rounded-xl border'}
       ${isDarkMode
-        ? 'bg-[#0d1117]/90 border-[#30363d]'
-        : 'bg-white/20 border-white/30'
+        ? noBorder ? 'bg-transparent' : 'bg-[#0d1117]/90 border-[#30363d]'
+        : noBorder ? 'bg-transparent' : 'bg-white/20 border-white/30'
       }
       ${isDiffMode ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-transparent' : ''}
-      relative flex overflow-hidden
+      relative flex overflow-hidden flex-1
     `}>
       {/* Loading Overlay */}
       {isLoadingPage && (

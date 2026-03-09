@@ -5,3 +5,6 @@ export { useSourcePanel } from './useSourcePanel';
 export { useWikiPages } from './useWikiPages';
 export { useResizablePanel } from './useResizablePanel';
 export { useMermaidModal } from './useMermaidModal';
+export { usePageTabs } from './usePageTabs';
+export { useMermaidEditor } from './useMermaidEditor';
+export { useSvgDrag } from './useSvgDrag';

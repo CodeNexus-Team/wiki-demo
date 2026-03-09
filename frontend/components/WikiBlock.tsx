@@ -2,8 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Mermaid from './Mermaid';
+import { MermaidEditModal } from './mermaid/MermaidEditModal';
 import { WikiBlock, MermaidMetadata, WikiSource, Neo4jIdMapping } from '../types';
-import { Plus, Check, GitCommitHorizontal, Trash2, FileDiff, Code, ChevronRight, ChevronDown, MoreHorizontal, Database } from 'lucide-react';
+import { Plus, Check, GitCommitHorizontal, Trash2, FileDiff, Code, ChevronRight, ChevronDown, MoreHorizontal, Database, Edit3 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { ghcolors, vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { WikiTheme, appleTheme } from '../config/wikiThemes';
@@ -26,6 +27,8 @@ interface WikiBlockRendererProps {
   highlightedMermaidNodeId?: string | null;
   // Mermaid double click
   onMermaidDoubleClick?: (chart: string, metadata?: MermaidMetadata) => void;
+  // Mermaid edit callback
+  onMermaidEdit?: (blockId: string, newChart: string) => void;
   // Theme
   theme?: WikiTheme;
   // Dark mode
@@ -73,6 +76,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   highlightedBlockId,
   highlightedMermaidNodeId,
   onMermaidDoubleClick,
+  onMermaidEdit,
   theme = appleTheme,
   isDarkMode = false,
   wikiPages = [],
@@ -81,7 +85,14 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [localHighlightedNodeId, setLocalHighlightedNodeId] = useState<string | null>(null);
+  const [showMermaidEditor, setShowMermaidEditor] = useState(false);
+  const [localMermaidContent, setLocalMermaidContent] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // 当 block.content 变化时，重置本地内容
+  useEffect(() => {
+    setLocalMermaidContent(null);
+  }, [block.content]);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -152,44 +163,46 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
     );
   };
 
-  // 渲染 Neo4j ID 小卡片
-  const renderNeo4jIdCard = (neo4jIds: Neo4jIdMapping | undefined, isMermaid: boolean = false) => {
-    if (!neo4jIds || Object.keys(neo4jIds).length === 0) return null;
+  // 渲染 Neo4j Source 小卡片（显示节点名称）
+  const renderNeo4jIdCard = (neo4jIds: Neo4jIdMapping | undefined, neo4jSource: Neo4jIdMapping | undefined, isMermaid: boolean = false) => {
+    // 优先使用 neo4jSource（节点名称），如果没有则不显示
+    const displayData = neo4jSource && Object.keys(neo4jSource).length > 0 ? neo4jSource : null;
+    if (!displayData) return null;
 
-    // 构建 ID 到节点的反向映射（用于 mermaid 点击高亮）
-    const idToNodes: Record<string, string[]> = {};
-    Object.entries(neo4jIds).forEach(([nodeId, neo4jId]) => {
-      const ids = Array.isArray(neo4jId) ? neo4jId : [neo4jId];
-      ids.forEach(id => {
-        if (!idToNodes[id]) idToNodes[id] = [];
-        idToNodes[id].push(nodeId);
+    // 构建名称到节点的反向映射（用于 mermaid 点击高亮）
+    const nameToNodes: Record<string, string[]> = {};
+    Object.entries(displayData).forEach(([nodeId, name]) => {
+      const names = Array.isArray(name) ? name : [name];
+      names.forEach(n => {
+        if (!nameToNodes[n]) nameToNodes[n] = [];
+        nameToNodes[n].push(nodeId);
       });
     });
 
-    // 收集所有唯一的 ID
-    const allIds = new Set<string>();
-    Object.values(neo4jIds).forEach(value => {
+    // 收集所有唯一的名称
+    const allNames = new Set<string>();
+    Object.values(displayData).forEach(value => {
       if (Array.isArray(value)) {
-        value.forEach(id => allIds.add(id));
+        value.forEach(name => allNames.add(name));
       } else if (value) {
-        allIds.add(value);
+        allNames.add(value);
       }
     });
 
-    if (allIds.size === 0) return null;
+    if (allNames.size === 0) return null;
 
-    const idArray = Array.from(allIds);
+    const nameArray = Array.from(allNames);
 
-    // 检查某个 ID 是否处于激活状态（其关联的节点被高亮）
-    const isIdActive = (id: string) => {
+    // 检查某个名称是否处于激活状态（其关联的节点被高亮）
+    const isNameActive = (name: string) => {
       if (!isMermaid || !localHighlightedNodeId) return false;
-      return idToNodes[id]?.includes(localHighlightedNodeId);
+      return nameToNodes[name]?.includes(localHighlightedNodeId);
     };
 
-    // 点击 ID 时高亮关联的第一个节点
-    const handleIdClick = (id: string) => {
+    // 点击名称时高亮关联的第一个节点
+    const handleNameClick = (name: string) => {
       if (!isMermaid) return;
-      const nodes = idToNodes[id];
+      const nodes = nameToNodes[name];
       if (nodes && nodes.length > 0) {
         const firstNode = nodes[0];
         setLocalHighlightedNodeId(localHighlightedNodeId === firstNode ? null : firstNode);
@@ -202,17 +215,17 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
           <Database size={12} className={theme.neo4jCard.labelIcon} />
           Neo4j Source
         </span>
-        {idArray.map(id => {
-          const isActive = isIdActive(id);
-          const relatedNodes = idToNodes[id] || [];
+        {nameArray.map(name => {
+          const isActive = isNameActive(name);
+          const relatedNodes = nameToNodes[name] || [];
           return (
             <span
-              key={id}
+              key={name}
               className={`${theme.neo4jCard.idTag} ${isMermaid ? 'cursor-pointer' : ''} ${isActive ? theme.neo4jCard.idTagActive : ''}`}
-              title={isMermaid ? `点击高亮节点: ${relatedNodes.join(', ')}` : `Neo4j Node ID: ${id}`}
-              onClick={() => handleIdClick(id)}
+              title={isMermaid ? `点击高亮节点: ${relatedNodes.join(', ')}` : `Neo4j Node: ${name}`}
+              onClick={() => handleNameClick(name)}
             >
-              <span className={isActive ? theme.neo4jCard.activeIdText : ''}>{id}</span>
+              <span className={isActive ? theme.neo4jCard.activeIdText : ''}>{name}</span>
             </span>
           );
         })}
@@ -229,18 +242,56 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
           : undefined;
         // 合并外部高亮和本地高亮状态
         const effectiveHighlightedNodeId = localHighlightedNodeId || highlightedMermaidNodeId;
+        // 使用本地内容或原始内容
+        const displayContent = localMermaidContent ?? content;
         return (
-          <div className={theme.mermaid}>
-            <Mermaid
-                chart={content}
-                metadata={block.metadata}
-                neo4jIds={block.neo4jIds}
-                onNodeClick={handleMermaidNodeClick}
-                highlightedNodeId={effectiveHighlightedNodeId}
-                onDoubleClick={() => onMermaidDoubleClick?.(content, block.metadata)}
-                status={block.status}
+          <>
+            <div className={`${theme.mermaid} relative group/mermaid`}>
+              {/* 编辑按钮 */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMermaidEditor(true);
+                }}
+                className={`
+                  absolute top-3 right-3 z-10 p-2 rounded-lg transition-all duration-200
+                  opacity-0 group-hover/mermaid:opacity-100
+                  ${isDarkMode
+                    ? 'bg-white/10 hover:bg-white/20 text-white/70 hover:text-white'
+                    : 'bg-black/5 hover:bg-black/10 text-gray-500 hover:text-gray-700'
+                  }
+                `}
+                title="编辑图表"
+              >
+                <Edit3 size={16} />
+              </button>
+              <Mermaid
+                  chart={displayContent}
+                  metadata={block.metadata}
+                  neo4jIds={block.neo4jIds}
+                  neo4jSource={block.neo4jSource}
+                  onNodeClick={handleMermaidNodeClick}
+                  highlightedNodeId={effectiveHighlightedNodeId}
+                  onDoubleClick={() => setShowMermaidEditor(true)}
+                  status={block.status}
+              />
+            </div>
+            {/* Mermaid 编辑模态框 */}
+            <MermaidEditModal
+              isOpen={showMermaidEditor}
+              initialChart={displayContent}
+              metadata={block.metadata}
+              onClose={() => setShowMermaidEditor(false)}
+              onApply={(newChart) => {
+                setLocalMermaidContent(newChart);
+                onMermaidEdit?.(block.id, newChart);
+              }}
+              onSave={(newChart) => {
+                setLocalMermaidContent(newChart);
+                onMermaidEdit?.(block.id, newChart);
+              }}
             />
-          </div>
+          </>
         );
 
       case 'code':
@@ -556,9 +607,9 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
 
         <div className={`transition-opacity duration-300 ${isSelected ? 'opacity-100' : 'opacity-100'}`}>
           {renderContent(block.content)}
-          {/* Neo4j ID 小卡片 - heading 显示 ID 列表，mermaid 显示节点映射 */}
-          {block.type === 'heading' && renderNeo4jIdCard(block.neo4jIds, false)}
-          {block.type === 'mermaid' && renderNeo4jIdCard(block.neo4jIds, true)}
+          {/* Neo4j Source 小卡片 - heading 显示名称列表，mermaid 显示节点映射 */}
+          {block.type === 'heading' && renderNeo4jIdCard(block.neo4jIds, block.neo4jSource, false)}
+          {block.type === 'mermaid' && renderNeo4jIdCard(block.neo4jIds, block.neo4jSource, true)}
         </div>
       </div>
 
@@ -578,6 +629,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
               highlightedBlockId={highlightedBlockId}
               highlightedMermaidNodeId={highlightedMermaidNodeId}
               onMermaidDoubleClick={onMermaidDoubleClick}
+              onMermaidEdit={onMermaidEdit}
               theme={theme}
               isDarkMode={isDarkMode}
               wikiPages={wikiPages}

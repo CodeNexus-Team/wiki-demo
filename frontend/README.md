@@ -12,9 +12,10 @@
 - **6 大分析视图** - 架构、API、业务流程、控制流、数据库、仪表盘
 - **交互式 Wiki 对象** - 文档拆解为可操作的原子块，支持块级选择和修改
 - **源码映射** - Mermaid 图表节点直接关联源代码，右键跳转
-- **Neo4j ID 关联** - Mermaid 节点与 Neo4j 图数据库 ID 关联，支持交互高亮
+- **Neo4j Source 显示** - Mermaid 节点显示关联的 Neo4j 节点名称（从数据库查询），支持交互高亮
 - **实时 Diff** - 可视化新增（绿）、修改（黄）、删除（红）
 - **多页面导航** - 树形导航器支持多 Wiki 页面切换
+- **页面标签栏** - VSCode 风格多标签页，快速切换页面，每个标签保持独立状态
 - **历史记录管理** - 自动保存生成历史，侧边栏一键访问，支持快速恢复
 - **主题系统** - 4 套视觉主题（Apple/GitHub/Notion/Technical），支持切换和持久化
 
@@ -39,10 +40,11 @@ codewiki-ai/
 ├── components/
 │   ├── AnalysisView.tsx          # 核心视图
 │   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图
-│   ├── WikiBlock.tsx             # 原子块渲染器（递归+折叠+Neo4j ID 卡片）
+│   ├── WikiBlock.tsx             # 原子块渲染器（递归+折叠+Neo4j Source 卡片）
 │   ├── WikiPageNavigator.tsx     # 多页面导航
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板
-│   ├── Mermaid.tsx               # 交互式图表（支持 subgraph 高亮、Neo4j ID）
+│   ├── PageTabBar.tsx            # 页面标签栏（v2.3 新增）
+│   ├── Mermaid.tsx               # 交互式图表（支持 subgraph 高亮、Neo4j Source）
 │   ├── SourceCodePanel.tsx       # 源码阅读器
 │   ├── QuestionSelector.tsx      # 问题选择器
 │   ├── chat/                     # 聊天组件（v2.1）
@@ -56,12 +58,13 @@ codewiki-ai/
 │       └── MermaidModal.tsx      # Mermaid 模态框
 ├── config/                       # 配置文件（v2.2）
 │   └── wikiThemes.ts             # Wiki 主题配置（4套主题）
-├── hooks/                        # 自定义 Hooks（v2.1/v2.2）
+├── hooks/                        # 自定义 Hooks（v2.1/v2.2/v2.3）
 │   ├── useBlockSelection.ts      # 块选择管理
 │   ├── useDiffMode.ts            # Diff 模式
 │   ├── useChatHistory.ts         # 聊天历史
 │   ├── useSourcePanel.ts         # 源码面板
 │   ├── useWikiPages.ts           # Wiki 页面导航
+│   ├── usePageTabs.ts            # 页面标签管理（v2.3 新增）
 │   └── useWikiTheme.ts           # Wiki 主题管理（v2.2）
 ├── services/
 │   ├── geminiService.ts          # Gemini AI 服务
@@ -130,6 +133,8 @@ npm run dev
 
 | 版本 | 更新 |
 |------|------|
+| v2.4 | **Neo4j Source 显示**：后端查询 Neo4j 节点名称、前端显示节点名称而非 ID、Mermaid 右键菜单显示 Neo4j Source |
+| v2.3 | **页面多标签页**：VSCode 风格页面标签栏（PageTabBar）、usePageTabs Hook、多页面快速切换、每个标签保持独立状态 |
 | v2.2 | **主题系统**：Wiki 主题切换（Apple/GitHub/Notion/Technical）、Neo4j ID 卡片样式随主题变化、Mermaid subgraph 高亮、右键菜单 Neo4j ID 显示 |
 | v2.1 | **组件重构**：提取 7 个自定义 Hooks、新建 chat/wiki/mermaid 组件目录、ChatPanel/WikiContent 共享组件、主视图代码量减少 51% |
 | v2.0 | 变更预览工作流重构：预览与应用分离、`/api/apply_changes` 接口、Mermaid 删除状态视觉效果、前后端块插入逻辑统一 |

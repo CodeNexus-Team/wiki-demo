@@ -36,10 +36,15 @@ mermaid.initialize({
   },
   flowchart: {
     curve: 'basis',
-    padding: 20,
+    padding: 30,
     nodeSpacing: 50,
-    rankSpacing: 50,
+    rankSpacing: 60,
     htmlLabels: true,
+    subGraphTitleMargin: {
+      top: 10,
+      bottom: 10,
+    },
+    titleTopMargin: 25,
   }
 });
 
@@ -182,13 +187,14 @@ interface MermaidProps {
   chart: string;
   metadata?: MermaidMetadata;
   neo4jIds?: Neo4jIdMapping;
+  neo4jSource?: Neo4jIdMapping;
   onNodeClick?: (nodeId: string, metadata?: MermaidMetadata) => void;
   highlightedNodeId?: string | null;
   onDoubleClick?: () => void;
   status?: 'inserted' | 'deleted' | 'modified' | 'original';
 }
 
-const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, onNodeClick, highlightedNodeId, onDoubleClick, status }) => {
+const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSource, onNodeClick, highlightedNodeId, onDoubleClick, status }) => {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ type: string; message: string } | null>(null);
@@ -336,10 +342,45 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, onNodeClic
     };
   }, [svg, metadata, neo4jIds, chartType]);
 
-  // 设置 SVG 内容
+  // 设置 SVG 内容并调整 subgraph 标题位置
   useEffect(() => {
     if (!containerRef.current || !svg) return;
     containerRef.current.innerHTML = svg;
+
+    // 调整 cluster (subgraph) 标题位置，避免被子节点遮挡
+    const svgElement = containerRef.current.querySelector('svg');
+    if (svgElement) {
+      // 查找所有 cluster 的标签
+      const clusterLabels = svgElement.querySelectorAll('.cluster-label');
+      clusterLabels.forEach((label) => {
+        const transform = label.getAttribute('transform');
+        if (transform) {
+          // 解析 translate(x, y) 并向上移动标题
+          const match = transform.match(/translate\(([\d.-]+),\s*([\d.-]+)\)/);
+          if (match) {
+            const x = parseFloat(match[1]);
+            const y = parseFloat(match[2]) - 15; // 向上移动 15px
+            label.setAttribute('transform', `translate(${x}, ${y})`);
+          }
+        }
+
+        // 增加标题的字体大小和加粗
+        const textElement = label.querySelector('text');
+        if (textElement) {
+          textElement.style.fontWeight = '600';
+        }
+      });
+
+      // 调整 cluster 背景的 padding
+      const clusters = svgElement.querySelectorAll('.cluster rect');
+      clusters.forEach((rect) => {
+        const currentY = parseFloat(rect.getAttribute('y') || '0');
+        const currentHeight = parseFloat(rect.getAttribute('height') || '0');
+        // 扩展顶部空间
+        rect.setAttribute('y', String(currentY - 20));
+        rect.setAttribute('height', String(currentHeight + 20));
+      });
+    }
   }, [svg]);
 
   // 高亮节点 - SVG 渲染后通过 DOM 操作
@@ -492,11 +533,11 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, onNodeClic
                     <ExternalLink size={14} />
                     查看相关文档
                 </button>
-                {neo4jIds?.[activeNodeId] && (
+                {neo4jSource?.[activeNodeId] && (
                     <div className="px-3 py-2.5 text-xs text-[#1d1d1f] border-t border-gray-100 flex items-center gap-2 bg-blue-50/50">
                         <Database size={14} className="text-blue-600" />
-                        <span className="text-gray-500">Neo4j ID:</span>
-                        <span className="font-mono text-blue-600">{neo4jIds[activeNodeId]}</span>
+                        <span className="text-gray-500">Neo4j Source:</span>
+                        <span className="font-mono text-blue-600">{Array.isArray(neo4jSource[activeNodeId]) ? (neo4jSource[activeNodeId] as string[]).join(', ') : neo4jSource[activeNodeId]}</span>
                     </div>
                 )}
             </div>,

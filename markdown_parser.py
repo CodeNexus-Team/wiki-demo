@@ -4,12 +4,92 @@ import uuid
 import os
 import argparse
 import sys
+from neo4j import GraphDatabase
 
 class MarkdownToJsonParser:
+    # Neo4j 连接配置
+    NEO4J_URI = "neo4j://127.0.0.1:7689"
+    NEO4J_USER = "neo4j"
+    NEO4J_PASSWORD = "c8a3974ba62qcc2"
+
     def __init__(self):
         self.global_id_counter = 0
         self.source_registry = [] # 用于存储 source_id 定义
         self.current_source_ids = [] # 临时存储当前解析到的引用ID
+        self._neo4j_driver = None
+        self._neo4j_name_cache = {}  # 缓存已查询的 neo4j id -> name 映射
+
+    def _get_neo4j_driver(self):
+        """获取 Neo4j 驱动连接（延迟初始化）"""
+        if self._neo4j_driver is None:
+            self._neo4j_driver = GraphDatabase.driver(
+                self.NEO4J_URI,
+                auth=(self.NEO4J_USER, self.NEO4J_PASSWORD)
+            )
+        return self._neo4j_driver
+
+    def _query_neo4j_name(self, node_id):
+        """根据 neo4j 节点 ID 查询对应的 name 字段
+
+        支持数字 ID（使用 id()）和字符串 element ID（使用 elementId()）
+        """
+        if node_id in self._neo4j_name_cache:
+            return self._neo4j_name_cache[node_id]
+
+        try:
+            driver = self._get_neo4j_driver()
+            with driver.session() as session:
+                # 尝试将 node_id 转为整数，如果成功则使用 id() 查询
+                try:
+                    int_id = int(node_id)
+                    result = session.run(
+                        "MATCH (n) WHERE id(n) = $node_id RETURN n.name AS name",
+                        node_id=int_id
+                    )
+                except ValueError:
+                    # 如果不是整数，使用 elementId() 查询
+                    result = session.run(
+                        "MATCH (n) WHERE elementId(n) = $node_id RETURN n.name AS name",
+                        node_id=node_id
+                    )
+                record = result.single()
+                if record and record["name"]:
+                    name = record["name"]
+                    self._neo4j_name_cache[node_id] = name
+                    return name
+        except Exception as e:
+            print(f"警告: 查询 Neo4j 节点 {node_id} 失败: {e}")
+
+        return None
+
+    def _build_neo4j_source(self, neo4j_id):
+        """根据 neo4j_id 映射构建 neo4j_source 映射
+
+        neo4j_id 的值可能是单个 ID 字符串/数字，也可能是 ID 列表
+        """
+        neo4j_source = {}
+        for key, node_id in neo4j_id.items():
+            if isinstance(node_id, list):
+                # 如果是列表，查询每个 ID 的 name
+                names = []
+                for nid in node_id:
+                    name = self._query_neo4j_name(str(nid))
+                    if name:
+                        names.append(name)
+                if names:
+                    neo4j_source[key] = names
+            else:
+                # 单个 ID
+                name = self._query_neo4j_name(str(node_id))
+                if name:
+                    neo4j_source[key] = name
+        return neo4j_source
+
+    def close(self):
+        """关闭 Neo4j 连接"""
+        if self._neo4j_driver:
+            self._neo4j_driver.close()
+            self._neo4j_driver = None
 
     def _generate_id(self):
         """生成全局唯一的简短ID，例如 S1, S2"""
@@ -497,7 +577,8 @@ class MarkdownToJsonParser:
                     "id": self._generate_id(),
                     "title": f"# {file_name}",
                     "content": root,
-                    "neo4j_id": {}
+                    "neo4j_id": {},
+                    "neo4j_source": {}
                 }
                 root = [h1_section]
 
@@ -522,6 +603,8 @@ class MarkdownToJsonParser:
         """
         if neo4j_id is None:
             neo4j_id = {}
+        # 根据 neo4j_id 查询对应的 name，构建 neo4j_source
+        neo4j_source = self._build_neo4j_source(neo4j_id) if neo4j_id else {}
         lines = markdown_text.split('\n')
 
         text_buffer = []
@@ -571,7 +654,8 @@ class MarkdownToJsonParser:
                                 "mermaid": code_content_str
                             },
                             "source_id": source_id,
-                            "neo4j_id": neo4j_id
+                            "neo4j_id": neo4j_id,
+                            "neo4j_source": neo4j_source
                         }
                         stack[-1]["content"].append(chart_node)
                     else:
@@ -604,17 +688,22 @@ class MarkdownToJsonParser:
                 # 从标题中提取章节号（如 "## 2.1 标题" -> "2.1"）
                 section_num_match = re.search(r'^#+\s*(\d+(?:\.\d+)*)', title_text)
                 section_neo4j_id = {}
+                section_neo4j_source = {}
                 if section_num_match:
                     section_num = section_num_match.group(1)
                     if section_num in neo4j_id:
                         section_neo4j_id = {section_num: neo4j_id[section_num]}
+                        # 查询对应的 name
+                        if section_num in neo4j_source:
+                            section_neo4j_source = {section_num: neo4j_source[section_num]}
 
                 new_section = {
                     "type": "section",
                     "id": self._generate_id(),
                     "title": title_text,
                     "content": [],
-                    "neo4j_id": section_neo4j_id
+                    "neo4j_id": section_neo4j_id,
+                    "neo4j_source": section_neo4j_source
                 }
 
                 while stack[-1]["level"] >= header_level:
@@ -788,6 +877,7 @@ def main():
         print(f"错误: 找不到输入文件 '{input_path}'")
         sys.exit(1)
 
+    parser_obj = None
     try:
         print(f"正在读取文件: {input_path} ...")
         parser_obj = MarkdownToJsonParser()
@@ -818,6 +908,10 @@ def main():
     except Exception as e:
         print(f"错误: {str(e)}")
         sys.exit(1)
+    finally:
+        # 关闭 Neo4j 连接
+        if parser_obj:
+            parser_obj.close()
 
 if __name__ == "__main__":
     main()     
