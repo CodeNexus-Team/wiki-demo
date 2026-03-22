@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Mermaid from './Mermaid';
@@ -37,6 +37,63 @@ interface WikiBlockRendererProps {
   wikiPages?: string[];
   onPageNavigate?: (pagePath: string) => void;
 }
+
+
+/**
+ * 预处理 Markdown：冒号结尾的列表项后，将同级或更浅的后续行重新缩进为子内容
+ * 例如：
+ *   - 具体流程包括：          ←  缩进=2, marker 宽度=2 ("- ")
+ *   1. 注册接口...             ←  缩进=2, 应该变成 4+2=6
+ *   整个控制器通过注解...       ←  同理
+ */
+const preprocessColonIndent = (content: string): string => {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  let adjusting = false;
+  let targetIndent = 0; // 后续行应有的缩进
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimEnd();
+
+    // 空行：保持 adjusting 状态，原样输出
+    if (trimmed === '') {
+      result.push(line);
+      continue;
+    }
+
+    const currentIndent = (line.match(/^(\s*)/) ?? ['', ''])[1].length;
+
+    // 检测列表项以中/英文冒号结尾
+    const colonListMatch = trimmed.match(/^(\s*)-\s+.*[：:]$/);
+    if (colonListMatch) {
+      adjusting = true;
+      // 子内容缩进 = 当前 "- " 的内容起始位置 + 2
+      targetIndent = colonListMatch[1].length + 4;
+      result.push(line);
+      continue;
+    }
+
+    if (adjusting) {
+      // 遇到新的列表标记（- **xxx**）或标题，停止调整
+      if (/^\s*-\s+\*\*/.test(trimmed) || /^\s*#{1,6}\s/.test(trimmed)) {
+        adjusting = false;
+        result.push(line);
+        continue;
+      }
+
+      // 当前行缩进 < 目标缩进，需要补齐
+      if (currentIndent < targetIndent) {
+        result.push(' '.repeat(targetIndent) + trimmed.trimStart());
+        continue;
+      }
+    }
+
+    result.push(line);
+  }
+
+  return result.join('\n');
+};
 
 // 清理标题中的 Markdown 标记（如 ###），保留实际标题内容
 const cleanHeadingContent = (content: string): string => {
@@ -108,6 +165,25 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   }, [showMenu]);
 
   const hasSources = block.sources && block.sources.length > 0;
+
+  // 稳定的 mermaid 回调，避免每次渲染创建新函数
+  const handleMermaidNodeClick = useCallback(
+    (nodeId: string, metadata?: MermaidMetadata) => {
+      onMermaidNodeClick?.(nodeId, metadata!, block.id);
+    },
+    [onMermaidNodeClick, block.id]
+  );
+
+  const handleMermaidApply = useCallback(
+    (newChart: string) => {
+      setLocalMermaidContent(newChart);
+      onMermaidEdit?.(block.id, newChart);
+    },
+    [onMermaidEdit, block.id]
+  );
+
+  const handleOpenMermaidEditor = useCallback(() => setShowMermaidEditor(true), []);
+  const handleCloseMermaidEditor = useCallback(() => setShowMermaidEditor(false), []);
 
   // Check if block has children
   const hasChildren = block.children && block.children.length > 0;
@@ -236,10 +312,6 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   const renderContent = (content: string) => {
     switch (block.type) {
       case 'mermaid':
-        // Wrap callback to include block.id
-        const handleMermaidNodeClick = onMermaidNodeClick
-          ? (nodeId: string, metadata?: MermaidMetadata) => onMermaidNodeClick(nodeId, metadata!, block.id)
-          : undefined;
         // 合并外部高亮和本地高亮状态
         const effectiveHighlightedNodeId = localHighlightedNodeId || highlightedMermaidNodeId;
         // 使用本地内容或原始内容
@@ -251,7 +323,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowMermaidEditor(true);
+                  handleOpenMermaidEditor();
                 }}
                 className={`
                   absolute top-3 right-3 z-10 p-2 rounded-lg transition-all duration-200
@@ -270,9 +342,9 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                   metadata={block.metadata}
                   neo4jIds={block.neo4jIds}
                   neo4jSource={block.neo4jSource}
-                  onNodeClick={handleMermaidNodeClick}
+                  onNodeClick={onMermaidNodeClick ? handleMermaidNodeClick : undefined}
                   highlightedNodeId={effectiveHighlightedNodeId}
-                  onDoubleClick={() => setShowMermaidEditor(true)}
+                  onDoubleClick={handleOpenMermaidEditor}
                   status={block.status}
               />
             </div>
@@ -281,15 +353,9 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
               isOpen={showMermaidEditor}
               initialChart={displayContent}
               metadata={block.metadata}
-              onClose={() => setShowMermaidEditor(false)}
-              onApply={(newChart) => {
-                setLocalMermaidContent(newChart);
-                onMermaidEdit?.(block.id, newChart);
-              }}
-              onSave={(newChart) => {
-                setLocalMermaidContent(newChart);
-                onMermaidEdit?.(block.id, newChart);
-              }}
+              onClose={handleCloseMermaidEditor}
+              onApply={handleMermaidApply}
+              onSave={handleMermaidApply}
             />
           </>
         );
@@ -404,7 +470,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
 
       case 'list':
         return (
-          <div className={theme.list}>
+          <div className={`${theme.list} [&>ul]:list-none [&>ul]:pl-0 [&>ol]:list-none [&>ol]:pl-0`}>
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
@@ -414,6 +480,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                 p: ({node, ...props}) => <span {...props} />,
                 a: ({node, ...props}) => <a {...props} className={theme.link} />,
                 code: ({node, ...props}) => <code {...props} className={theme.inlineCode} />,
+                strong: ({node, ...props}) => <strong {...props} className={theme.strong} />,
                 hr: () => theme.hrDot ? (
                   <div className={theme.hr}>
                     <div className="h-px flex-1 bg-gradient-to-r from-transparent via-[#d2d2d7] to-transparent" />
@@ -425,7 +492,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                 )
               }}
             >
-              {content}
+              {preprocessColonIndent(content)}
             </ReactMarkdown>
           </div>
         );
@@ -464,6 +531,9 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                 code: ({node, ...props}) => <code {...props} className={theme.inlineCode} />,
                 strong: ({node, ...props}) => <strong {...props} className={theme.strong} />,
                 em: ({node, ...props}) => <em {...props} className={theme.em} />,
+                ul: ({node, ...props}) => <ul {...props} className={`wiki-list ${theme.ul}`} />,
+                ol: ({node, ...props}) => <ol {...props} className={`wiki-list ${theme.ol}`} />,
+                li: ({node, ...props}) => <li {...props} className={theme.li} />,
                 // 表格样式补充（兼容后端将表格作为 text 传入的情况）
                 table: ({node, ...props}) => (
                   <div className={theme.table}>
@@ -488,7 +558,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                 )
               }}
             >
-              {content}
+              {preprocessColonIndent(content)}
             </ReactMarkdown>
           </div>
         );
@@ -642,4 +712,19 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   );
 };
 
-export default WikiBlockRenderer;
+// 使用 React.memo 优化性能，避免不必要的重渲染
+export default React.memo(WikiBlockRenderer, (prevProps, nextProps) => {
+  // 只在关键 props 变化时才重新渲染
+  return (
+    prevProps.block.id === nextProps.block.id &&
+    prevProps.block.content === nextProps.block.content &&
+    prevProps.block.status === nextProps.block.status &&
+    prevProps.block.isCollapsed === nextProps.block.isCollapsed &&
+    prevProps.block.children === nextProps.block.children &&
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.highlightedBlockId === nextProps.highlightedBlockId &&
+    prevProps.highlightedMermaidNodeId === nextProps.highlightedMermaidNodeId &&
+    prevProps.isDarkMode === nextProps.isDarkMode &&
+    prevProps.theme?.id === nextProps.theme?.id
+  );
+});

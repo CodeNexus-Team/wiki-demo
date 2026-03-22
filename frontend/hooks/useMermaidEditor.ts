@@ -135,9 +135,10 @@ export function useMermaidEditor(initialCode: string = ''): MermaidEditorState {
   const processedCode = useMemo(() => {
     let result = code;
 
-    // 确保有方向声明（支持 LR, RL, TB, BT, TD 方向）
-    if (!/^(flowchart|graph)\s+(LR|RL|TB|BT|TD)/m.test(result)) {
-      result = `flowchart ${config.direction}\n${result}`;
+    // 仅对 flowchart/graph 类型补充方向声明，不影响其他图表类型
+    const isFlowchart = /^(flowchart|graph)\b/m.test(result);
+    if (isFlowchart && !/^(flowchart|graph)\s+(LR|RL|TB|BT|TD)/m.test(result)) {
+      result = result.replace(/^(flowchart|graph)\b/m, `$1 ${config.direction}`);
     }
 
     return result;

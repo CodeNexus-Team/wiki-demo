@@ -152,7 +152,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
 
   // 缩放控制
   const handleZoomIn = useCallback(() => {
-    setZoom((prev) => Math.min(prev + 0.1, 3));
+    setZoom((prev) => prev + 0.1);
   }, []);
 
   const handleZoomOut = useCallback(() => {
@@ -199,7 +199,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      setZoom((prev) => Math.max(0.3, Math.min(3, prev + delta)));
+      setZoom((prev) => Math.max(0.3, prev + delta));
     }
   }, []);
 

@@ -95,7 +95,7 @@ export function useMermaidModal(): UseMermaidModalReturn {
       e.preventDefault();
       setZoom(prev => {
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        return Math.max(0.5, Math.min(3, prev + delta));
+        return Math.max(0.5, prev + delta);
       });
     }
   }, []);

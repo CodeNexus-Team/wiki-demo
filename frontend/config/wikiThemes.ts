@@ -77,6 +77,7 @@ export interface WikiTheme {
     border: string;           // 边框颜色
   };
 
+
   // Neo4j ID 卡片样式
   neo4jCard: {
     container: string;        // 容器样式
@@ -144,6 +145,7 @@ export const appleTheme: WikiTheme = {
 
   strong: "font-semibold text-[#1d1d1f]",
   em: "italic text-[#424245]",
+
 
   navigator: {
     activeItem: "bg-[#0071E3] text-white shadow-sm",
@@ -222,6 +224,7 @@ export const githubTheme: WikiTheme = {
   strong: "font-semibold",
   em: "italic",
 
+
   navigator: {
     activeItem: "bg-[#2C974B] text-white",
     activeIcon: "text-white",
@@ -299,6 +302,7 @@ export const notionTheme: WikiTheme = {
   strong: "font-semibold",
   em: "italic",
 
+
   navigator: {
     activeItem: "bg-[#37352f] text-white",
     activeIcon: "text-white",
@@ -375,6 +379,7 @@ export const technicalTheme: WikiTheme = {
 
   strong: "font-bold text-[#24292f]",
   em: "italic text-[#57606a]",
+
 
   navigator: {
     activeItem: "bg-[#0969da] text-white",
@@ -454,6 +459,7 @@ export const appleDarkTheme: WikiTheme = {
   strong: "font-semibold text-[#f5f5f7]",
   em: "italic text-[#a1a1a6]",
 
+
   navigator: {
     activeItem: "bg-[#2997ff] text-white shadow-sm",
     activeIcon: "text-white",
@@ -531,6 +537,7 @@ export const githubDarkTheme: WikiTheme = {
 
   strong: "font-semibold text-[#e6edf3]",
   em: "italic text-[#7d8590]",
+
 
   navigator: {
     activeItem: "bg-[#238636] text-white",
@@ -610,6 +617,7 @@ export const notionDarkTheme: WikiTheme = {
   strong: "font-semibold text-[#ffffffcf]",
   em: "italic text-[#ffffff71]",
 
+
   navigator: {
     activeItem: "bg-[#ffffffcf] text-[#191919]",
     activeIcon: "text-[#191919]",
@@ -687,6 +695,7 @@ export const technicalDarkTheme: WikiTheme = {
 
   strong: "font-bold text-[#e6edf3]",
   em: "italic text-[#7d8590]",
+
 
   navigator: {
     activeItem: "bg-[#58a6ff] text-white",

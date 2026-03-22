@@ -43,7 +43,7 @@ interface WikiContentProps {
   noBorder?: boolean;
 }
 
-export const WikiContent: React.FC<WikiContentProps> = ({
+const WikiContentInner: React.FC<WikiContentProps> = ({
   blocks,
   selectedBlockIds,
   isDiffMode = false,
@@ -341,5 +341,8 @@ export const WikiContent: React.FC<WikiContentProps> = ({
     </div>
   );
 };
+
+// React.memo 包装，避免 AnalysisView 因 prompt 输入等无关状态变化导致整棵 block 树重渲染
+export const WikiContent = React.memo(WikiContentInner);
 
 export default WikiContent;

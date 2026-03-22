@@ -479,7 +479,45 @@ class MarkdownToJsonParser:
                     code_block_lang = stripped_line.replace("```", "").strip()
 
             elif in_code_block:
-                code_block_content.append(line)
+                # 检测行尾粘连的 ```（如 "end```" 或 "content```"）
+                if stripped_line.endswith("```") and stripped_line != "```" and not stripped_line.startswith("```"):
+                    content_part = line[:line.rfind("```")]
+                    if content_part.strip():
+                        code_block_content.append(content_part)
+                    in_code_block = False
+                    flush_text_buffer()
+                    code_content_str = "\n".join(code_block_content)
+
+                    if code_block_lang == "mermaid":
+                        if mapping is None:
+                            chart_mapping, _ = self._extract_mermaid_nodes(code_content_str)
+                        else:
+                            chart_mapping = mapping
+                        chart_node = {
+                            "type": "chart",
+                            "id": self._generate_id(),
+                            "content": {
+                                "mapping": chart_mapping,
+                                "mermaid": code_content_str
+                            },
+                            "source_id": source_id
+                        }
+                        stack[-1]["content"].append(chart_node)
+                    else:
+                        full_code_md = f"```{code_block_lang}\n{code_content_str}\n```"
+                        text_node = {
+                            "type": "text",
+                            "id": self._generate_id(),
+                            "content": {
+                                "markdown": full_code_md
+                            },
+                            "source_id": source_id
+                        }
+                        stack[-1]["content"].append(text_node)
+
+                    code_block_content = []
+                else:
+                    code_block_content.append(line)
 
             # 2. 处理标题 (Section)
             elif re.match(r'^#{1,6}\s', line):
@@ -677,7 +715,51 @@ class MarkdownToJsonParser:
                     code_block_lang = stripped_line.replace("```", "").strip()
 
             elif in_code_block:
-                code_block_content.append(line)
+                # 检测行尾粘连的 ```（如 "end```" 或 "content```"）
+                if stripped_line.endswith("```") and stripped_line != "```" and not stripped_line.startswith("```"):
+                    # 将 ``` 之前的内容作为代码块的最后一行
+                    content_part = line[:line.rfind("```")]
+                    if content_part.strip():
+                        code_block_content.append(content_part)
+                    # 关闭代码块（模拟遇到独立的 ```）
+                    in_code_block = False
+                    flush_text_buffer()
+
+                    code_content_str = "\n".join(code_block_content)
+
+                    if code_block_lang == "mermaid":
+                        if mapping is None:
+                            chart_mapping, _ = self._extract_mermaid_nodes(code_content_str)
+                        else:
+                            chart_mapping = mapping
+
+                        chart_node = {
+                            "type": "chart",
+                            "id": self._generate_id(),
+                            "content": {
+                                "mapping": chart_mapping,
+                                "mermaid": code_content_str
+                            },
+                            "source_id": source_id,
+                            "neo4j_id": neo4j_id,
+                            "neo4j_source": neo4j_source
+                        }
+                        stack[-1]["content"].append(chart_node)
+                    else:
+                        full_code_md = f"```{code_block_lang}\n{code_content_str}\n```"
+                        text_node = {
+                            "type": "text",
+                            "id": self._generate_id(),
+                            "content": {
+                                "markdown": full_code_md
+                            },
+                            "source_id": source_id
+                        }
+                        stack[-1]["content"].append(text_node)
+
+                    code_block_content = []
+                else:
+                    code_block_content.append(line)
 
             elif re.match(r'^#{1,6}\s', line):
                 flush_text_buffer()
@@ -800,7 +882,44 @@ class MarkdownToJsonParser:
                     code_block_lang = stripped_line.replace("```", "").strip()
 
             elif in_code_block:
-                code_block_content.append(line)
+                # 检测行尾粘连的 ```（如 "end```" 或 "content```"）
+                if stripped_line.endswith("```") and stripped_line != "```" and not stripped_line.startswith("```"):
+                    content_part = line[:line.rfind("```")]
+                    if content_part.strip():
+                        code_block_content.append(content_part)
+                    in_code_block = False
+                    flush_text_buffer()
+                    code_content_str = "\n".join(code_block_content)
+
+                    if code_block_lang == "mermaid":
+                        mapping_data, id_list = self._extract_mermaid_nodes(code_content_str, mapping_file_path)
+                        if id_list:
+                            all_id_lists.extend(id_list)
+                        chart_node = {
+                            "type": "chart",
+                            "id": self._generate_id(),
+                            "content": {
+                                "mapping": mapping_data,
+                                "mermaid": code_content_str
+                            },
+                            "source_id": ["1"]
+                        }
+                        stack[-1]["content"].append(chart_node)
+                    else:
+                        full_code_md = f"```{code_block_lang}\n{code_content_str}\n```"
+                        text_node = {
+                            "type": "text",
+                            "id": self._generate_id(),
+                            "content": {
+                                "markdown": full_code_md
+                            },
+                            "source_id": ["1"]
+                        }
+                        stack[-1]["content"].append(text_node)
+
+                    code_block_content = []
+                else:
+                    code_block_content.append(line)
 
             elif re.match(r'^#{1,6}\s', line):
                 flush_text_buffer()

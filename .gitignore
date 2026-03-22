@@ -37,7 +37,7 @@ Desktop.ini
 
 # Conversion output
 **/wiki_result/
-
+/wiki_test/
 /server/user_data/
 # Frontend (if not using submodule)
 frontend/node_modules/
@@ -47,7 +47,7 @@ frontend/build/
 frontend/.cache/
 frontend/.vite/
 frontend/*.tsbuildinfo
-
+/output/
 # Logs
 *.log
 logs/
