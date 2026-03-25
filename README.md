@@ -1,198 +1,278 @@
-# Wiki Demo 启动脚本
+# Wiki Demo
 
-一键启动 Wiki Demo 项目的前端和后端服务器。
+基于 AI 的交互式代码仓库 Wiki 生成与编辑平台。支持从代码仓库自动生成结构化 Wiki 文档。
 
 ## 功能特性
 
-- 同时启动前端（Vite）和后端（FastAPI）服务器
-- 支持 Markdown 文件转换为 JSON 格式
-- 实时显示两个服务器的日志输出
-- 统一的进程管理，Ctrl+C 可同时停止所有服务
-- 自动错误处理和进程清理
+- 自动将 `.meta.json` / `.md` 格式的 Wiki 数据转换为前端可渲染的 JSON 格式
+- 交互式 Wiki 浏览：层级折叠、源码关联、Mermaid 图表、多页 Tab 切换
+- AI 驱动的内容编辑：选中 block 后由 Claude 智能体读取源码并修改内容
+- Diff 预览与变更审核：修改前后红绿对比，确认后写入文件
+- Neo4j 知识图谱集成：代码实体关系查询
+
+## 架构概览
+
+```
+前端 (React + Vite)          后端 (FastAPI)              智能体 (Claude CLI)
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
+│  WikiBrowser    │     │  /api/fetch_page │     │  claude -p prompt   │
+│  AnalysisView   │────▶│  /api/detailed   │────▶│  Read / Grep / Bash │
+│  WikiContent    │     │  /api/apply      │     │  输出修改指令        │
+│  DiffMode       │◀────│  /api/scan_wikis │◀────│                     │
+└─────────────────┘     └──────────────────┘     └─────────────────────┘
+     :3000                   :11219
+```
 
 ## 前置要求
 
 ### 后端依赖
 - Python 3.7+
-- 安装所需的 Python 包：
+- 安装 Python 包：
   ```bash
-  pip install fastapi uvicorn
+  pip install fastapi uvicorn anthropic
   ```
 
 ### 前端依赖
 - Node.js 16+
-- 安装前端依赖：
+- 安装依赖：
   ```bash
   cd frontend
   npm install
   ```
 
-## 使用方法
+### 智能体依赖（交互式编辑功能）
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并完成认证
+- 验证安装：`claude --version`
 
-### 基本用法
+### 可选依赖
+- Neo4j 数据库（用于代码实体关系查询，未配置时自动跳过）
 
-```bash
-python start.py <wiki_root_path> [c]
-```
+## 快速开始
 
-### 参数说明
-
-- `<wiki_root_path>` (必需): Wiki 内容的根目录路径
-- `c` (可选): 如果提供此参数，会先将所有 Markdown/wiki结果形式的json 文件转换为前端可渲染的 JSON 格式
-
-**注意：如果wiki结果为json，请以.meta.json结尾；为了减轻ai负担,wiki结果的json和前端要求的json并不一样，所以需要转换，转换后的前端要求的json文件会位于<wiki_root_path>/wiki_result 中**
-
-### 使用示例
-
-#### 1. 直接启动服务器
+### 1. 转换数据并启动
 
 ```bash
-python start.py /path/to/wiki
+python start.py /path/to/wiki-data c
 ```
 
-这将：
-- 使用 `/path/to/wiki/wiki_result` 作为服务器根目录
-- 启动后端服务器在 http://localhost:11219
-- 启动前端开发服务器（通常在 http://localhost:3000）
+执行流程：
+1. 扫描目录下的 `.md` 和 `.meta.json` 文件
+2. 转换为前端 JSON 格式，输出到 `/path/to/wiki-data/wiki_result/`
+3. 启动后端（http://localhost:11219）和前端（http://localhost:3000）
 
-#### 2. 转换后启动服务器
+### 2. 直接启动（已有转换后数据）
 
 ```bash
-python start.py /path/to/wiki c
+python start.py /path/to/wiki-data
 ```
 
-这将：
-1. 扫描 `/path/to/wiki` 目录下的所有 `.md` 文件
-2. 将它们转换为 JSON 格式并保存到 `/path/to/wiki/wiki_result` 目录
-3. 保持原有的目录结构
-4. 启动前端和后端服务器
+### 3. 浏览器访问
 
+打开 http://localhost:3000，在侧边栏点击「生成 Wiki」，点击生成按钮即可浏览所有 Wiki 页面。
 
+## 输入数据格式
 
-### 查看结果
-**浏览器打开 http://localhost:3000
-随意选择一个聊天框输入随意内容，在扩展语句部分也选择随意内容，即可看到目标目录的所有wiki的显示结果**
+### `.meta.json` 格式（推荐）
+
+AI 生成 Wiki 时的输出格式，结构精简，减轻 AI 负担：
+
+```json
+{
+  "wiki": [
+    {
+      "markdown": "## 1. 模块功能概述\n\n该模块负责...",
+      "neo4j_id": {
+        "section_ref": 12345
+      }
+    },
+    {
+      "markdown": "## 2. 核心组件\n\n### 2.1 SomeClass\n\n描述...",
+      "mermaid": "graph TD\n  A-->B",
+      "neo4j_id": {
+        "node_id": 67890
+      }
+    }
+  ],
+  "source_id_list": [
+    {
+      "source_id": "3791",
+      "name": "com/example/SomeClass.java",
+      "lines": ["55-56"]
+    }
+  ]
+}
+```
+
+**字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `wiki` | array | Wiki 内容块列表 |
+| `wiki[].markdown` | string | Markdown 格式的文档内容 |
+| `wiki[].mermaid` | string | 可选，Mermaid 图表代码 |
+| `wiki[].neo4j_id` | object | 可选，内容与 Neo4j 节点的映射关系 |
+| `source_id_list` | array | 源码引用列表 |
+| `source_id_list[].source_id` | string | 引用 ID（在 markdown 中通过 block 的 source_id 字段关联） |
+| `source_id_list[].name` | string | 源码文件路径 |
+| `source_id_list[].lines` | string[] | 关联的行号范围，如 `["55-56", "100-120"]` |
+
+### `.md` 格式
+
+标准 Markdown 文件，使用 heading 层级表示文档结构。
+
+### 转换后的前端 JSON 格式
+
+转换后生成层级嵌套的 block 树结构：
+
+```json
+{
+  "markdown_content": [
+    {
+      "type": "section",
+      "id": "S1",
+      "title": "## 1. 模块功能概述",
+      "content": [
+        {
+          "type": "text",
+          "id": "S2",
+          "content": {
+            "markdown": "该模块负责...",
+            "mermaid": "graph TD\n  A-->B"
+          },
+          "source_id": ["3791"],
+          "neo4j_id": { "section_ref": 12345 },
+          "neo4j_source": { "section_ref": "SomeClass" }
+        }
+      ]
+    }
+  ],
+  "source_id": [
+    {
+      "source_id": "3791",
+      "name": "com/example/SomeClass.java",
+      "lines": ["55-56"]
+    }
+  ]
+}
+```
+
+**Block 类型：**
+
+| type | 说明 | 关键字段 |
+|------|------|---------|
+| `section` | 章节容器 | `title`（heading 文本）, `content`（子 block 数组） |
+| `text` | 内容叶节点 | `content.markdown`, 可选 `content.mermaid`, `source_id` |
+
+## 源码文件存放
+
+交互式编辑功能需要访问代码仓库的实际源码文件。源码文件需存放在以下位置：
+
+```
+frontend/public/source-code/
+└── <项目名>/                    # 代码仓库根目录
+    ├── mall-admin/
+    │   └── src/main/java/...
+    ├── mall-common/
+    │   └── src/main/java/...
+    └── ...
+```
+
+**两个使用场景：**
+
+1. **前端源码面板展示**：点击 Wiki block 关联的源码引用时，前端直接从 `frontend/public/source-code/` 加载文件内容并高亮显示。
+
+2. **智能体读取源码**：Claude CLI 的工作目录为项目根目录，模型通过 `Read` 工具读取 `frontend/public/source-code/<项目名>/` 下的文件来获取准确信息。System Prompt 中需指定源码路径（当前硬编码在 `agent.py` 的 `SYSTEM_PROMPT` 中）。
+
+**配置步骤：**
+
+1. 将代码仓库复制或软链接到 `frontend/public/source-code/` 下：
+   ```bash
+   # 复制
+   cp -r /path/to/your/java-project frontend/public/source-code/my-project
+
+   # 或软链接（推荐，避免重复占用空间）
+   ln -s /path/to/your/java-project frontend/public/source-code/my-project
+   ```
+
+2. 修改 `server/agent.py` 中 `SYSTEM_PROMPT` 的源码路径：
+   ```
+   4. 对应源码在 /absolute/path/to/wiki-demo/frontend/public/source-code/my-project 中
+   ```
+
+> `.meta.json` 中 `source_id_list[].name` 的文件路径应与 `frontend/public/source-code/<项目名>/` 下的相对路径一致。例如 `name` 为 `mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`，则对应文件为 `frontend/public/source-code/mall/mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`。
+
+## 交互式编辑（智能体）
+
+在前端选中一个或多个 block 后输入修改指令，后端会：
+
+1. 提取选中 block 的内容和页面结构概览
+2. 调用 Claude Code CLI，模型自主决定是否需要读取源码
+3. 模型输出修改指令（replace / insert_after / delete）
+4. 前端展示 Diff 预览（红色原内容 / 绿色新内容）
+5. 用户确认后写入 JSON 文件
+
+### 智能体日志
+
+调用日志保存在 `server/logs/agent.log`，记录：
+- 每次请求的参数和耗时
+- Claude 调用的工具（Read、Grep、Bash 等）及返回结果
+- 模型输出的修改指令内容
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WIKI_ROOT_PATH` | 自动设置 | Wiki JSON 文件根目录（启动时由 demo.py 自动设置为 `<root>/wiki_result`） |
+| `CLAUDE_MODEL` | `sonnet` | Claude 模型选择：`sonnet` / `opus` / `haiku` |
+| `CLAUDE_MAX_TOKENS` | `4096` | 智能体输出 token 上限 |
+| `MAX_TOOL_ROUNDS` | `15` | 智能体最大工具调用轮次 |
+| `SOURCE_ROOT_PATH` | 空 | 源码根目录（智能体读取源码时使用） |
+| `NEO4J_URI` | 未设置 | Neo4j 连接地址（可选，未配置时跳过图谱查询） |
+| `NEO4J_USER` | `neo4j` | Neo4j 用户名 |
+| `NEO4J_PASSWORD` | 空 | Neo4j 密码 |
+
+## API 接口
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/list_wikis` | GET | 获取 Wiki 文件树状列表 |
+| `/api/scan_wikis` | GET | 扫描目录返回所有页面路径 |
+| `/api/fetch_page?page_path=xxx` | POST | 获取单个 Wiki 页面内容 |
+| `/api/user_query` | POST | 扩展查询 / 执行工作流 |
+| `/api/detailed_query` | POST | 智能体交互式修改（选中 block + 用户指令） |
+| `/api/apply_changes` | POST | 确认并应用变更到 JSON 文件 |
 
 ## 目录结构
 
-转换后的目录结构示例：
-
 ```
-/path/to/wiki/
-├── guide.md                    # 原始 Markdown 文件
-├── docs/
-│   ├── api.md
-│   └── tutorial.md
-└── wiki_result/                # 转换后的 JSON 文件目录（服务器使用）
-    ├── guide.json
-    └── docs/
-        ├── api.json
-        └── tutorial.json
-```
-
-## 服务器地址
-
-启动后可以访问：
-
-- **后端 API**: http://localhost:11219
-- **前端界面**: http://localhost:3000 (Vite 默认端口)
-
-## 日志输出
-
-脚本会实时显示两个服务器的日志，格式如下：
-
-```
-[Backend] Starting wiki server with root: /path/to/wiki/wiki_result
-[Backend] Server will run at http://localhost:11219
-[Frontend] VITE v6.2.0  ready in 500 ms
-[Frontend] ➜  Local:   http://localhost:3000/
+wiki-demo/
+├── start.py                # 一键启动脚本（前端 + 后端）
+├── demo.py                 # 后端启动脚本
+├── markdown_parser.py      # .meta.json / .md → 前端 JSON 转换器
+├── clear.py                # JSON 文件清理工具
+├── server/
+│   ├── server.py           # FastAPI 后端主程序
+│   ├── agent.py            # Claude 智能体（交互式编辑）
+│   ├── backend_mock.py     # Mock 实现
+│   └── logs/
+│       └── agent.log       # 智能体调用日志
+├── frontend/
+│   ├── App.tsx             # 前端入口
+│   ├── components/         # React 组件
+│   ├── hooks/              # 自定义 Hooks
+│   ├── services/           # API 服务层
+│   └── utils/              # 工具函数
+└── output_all/             # 示例数据
+    ├── *.meta.json         # 输入数据
+    └── wiki_result/        # 转换后的前端 JSON
 ```
 
-## 停止服务器
-
-按 `Ctrl+C` 可以同时停止所有服务器。脚本会自动清理所有进程。
-
-## 清理 JSON 文件
-
-`clear.py` 是一个独立的通用工具，用于清理指定目录下的所有 JSON 文件。
-
-### 基本用法
-
-```bash
-python clear.py <target_path> [选项]
-```
-
-### 参数说明
-
-- `<target_path>` (必需): 要清理 JSON 文件的目标目录
-- `-f, --force`: 强制删除，不需要确认
-- `-r, --recursive`: 递归删除子目录中的 JSON 文件（默认启用）
-- `--no-recursive`: 仅删除目标目录中的 JSON 文件，不包括子目录
-
-### 使用示例
-
-#### 1. 递归删除所有 JSON 文件（需要确认）
-
-```bash
-python clear.py /path/to/directory
-```
-
-这将：
-- 扫描目标目录及其所有子目录
-- 列出所有找到的 JSON 文件
-- 要求用户确认后删除
-- 自动清理空目录
-
-#### 2. 强制删除（无需确认）
-
-```bash
-python clear.py /path/to/directory -f
-```
-
-#### 3. 仅删除当前目录的 JSON 文件（不包括子目录）
-
-```bash
-python clear.py /path/to/directory --no-recursive
-```
-
-#### 4. 清理 wiki_result 目录
-
-```bash
-python clear.py /path/to/wiki/wiki_result -f
-```
-
-### 清理示例输出
-
-```
-Target directory: /path/to/directory
-Found 15 JSON file(s)
-
-Files to be deleted:
-  - guide.json
-  - docs/api.json
-  - docs/tutorial.json
-  ...
-
-Are you sure you want to delete these files? (yes/no): yes
-
-Deleting JSON files...
-  Deleted 1/15: guide.json
-  Deleted 2/15: api.json
-  ...
-  Deleted 15/15: tutorial.json
-
-✓ Successfully deleted 15 JSON file(s)
-✓ Removed 3 empty directories
-```
-
-## 单独启动脚本
-
-如果需要单独启动后端或前端：
+## 单独启动
 
 ### 仅启动后端
 
 ```bash
-python demo.py /path/to/wiki [c]
+python demo.py /path/to/wiki-data [c]
 ```
 
 ### 仅启动前端
@@ -202,40 +282,30 @@ cd frontend
 npm run dev
 ```
 
+## 清理 JSON 文件
+
+```bash
+python clear.py /path/to/wiki-data/wiki_result -f
+```
+
 ## 故障排除
 
 ### 端口被占用
+- 后端端口：编辑 `demo.py`，修改 `port=11219`
+- 前端端口：编辑 `frontend/vite.config.ts`，添加 `server: { port: 3001 }`
 
-如果端口 11219 或 3000 已被占用：
-
-1. 后端端口修改：编辑 [demo.py](demo.py#L77)，修改 `port=11219`
-2. 前端端口修改：编辑 `frontend/vite.config.ts`，添加：
-   ```typescript
-   export default defineConfig({
-     server: {
-       port: 3001  // 修改为其他端口
-     }
-   })
-   ```
+### 智能体调用失败
+- 确认 Claude Code CLI 已安装：`claude --version`
+- 检查日志：`server/logs/agent.log`
+- 如果使用第三方中转，在 `agent.py` 中配置 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`
 
 ### 转换失败
-
-如果 Markdown 转换失败，检查：
-- `markdown_parser.py` 文件是否存在
-- Markdown 文件格式是否正确
-- 是否有文件权限问题
+- 确认 `markdown_parser.py` 存在
+- 检查输入文件格式是否符合 `.meta.json` 或 `.md` 规范
 
 ### 前端启动失败
-
-如果前端无法启动：
 ```bash
 cd frontend
 rm -rf node_modules package-lock.json
 npm install
 ```
-
-## 环境变量
-
-后端服务器使用以下环境变量：
-
-- `WIKI_ROOT_PATH`: Wiki 内容的根目录（自动设置为 `<root_path>/wiki_result`）

@@ -68,6 +68,11 @@ class MarkdownToJsonParser:
         neo4j_id 的值可能是单个 ID 字符串/数字，也可能是 ID 列表
         """
         neo4j_source = {}
+        if isinstance(neo4j_id, list):
+            # neo4j_id 是纯 ID 列表，转为 dict 格式处理
+            neo4j_id = {str(i): nid for i, nid in enumerate(neo4j_id)}
+        if not isinstance(neo4j_id, dict):
+            return neo4j_source
         for key, node_id in neo4j_id.items():
             if isinstance(node_id, list):
                 # 如果是列表，查询每个 ID 的 name
