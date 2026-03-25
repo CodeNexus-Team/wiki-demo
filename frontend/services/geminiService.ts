@@ -163,10 +163,30 @@ export const SUGGESTIONS: Record<AnalysisType, string[]> = {
 };
 
 class GeminiService {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenAI | null = null;
 
   constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const apiKey = process.env.API_KEY;
+    if (apiKey && apiKey !== 'undefined' && apiKey.trim() !== '') {
+      try {
+        this.ai = new GoogleGenAI({ apiKey });
+      } catch (e) {
+        console.warn('Gemini API 初始化失败，Gemini 相关功能将不可用:', e);
+      }
+    } else {
+      console.warn('未配置 GEMINI_API_KEY，Gemini 相关功能将不可用。CodeNexus 功能不受影响。');
+    }
+  }
+
+  isAvailable(): boolean {
+    return this.ai !== null;
+  }
+
+  private getClient(): GoogleGenAI {
+    if (!this.ai) {
+      throw new Error('Gemini API Key 未配置。请在 frontend/.env.local 文件中设置 GEMINI_API_KEY 后重启服务。');
+    }
+    return this.ai;
   }
 
   getSuggestions(type: AnalysisType): string[] {
@@ -220,7 +240,7 @@ class GeminiService {
       await new Promise(resolve => setTimeout(resolve, 500)); // Fake delay for UX
 
       onProgress?.('请求智能引擎进行分析...');
-      const response = await this.ai.models.generateContent({
+      const response = await this.getClient().models.generateContent({
         model: resolvedModel,
         contents: fullPrompt,
         config: { systemInstruction: SYSTEM_INSTRUCTION }
@@ -243,7 +263,7 @@ class GeminiService {
         Please REWRITE the entire response with corrected Mermaid syntax.
         Remember: Double quotes for labels, balanced activate/deactivate.
         `;
-        const fixResponse = await this.ai.models.generateContent({
+        const fixResponse = await this.getClient().models.generateContent({
             model: resolvedModel,
             contents: [
                 { role: 'user', parts: [{ text: fullPrompt }] },
@@ -319,7 +339,7 @@ class GeminiService {
 
     try {
       onProgress?.('发送优化指令...');
-      const response = await this.ai.models.generateContent({
+      const response = await this.getClient().models.generateContent({
         model: resolvedModel,
         contents: prompt,
         config: { 
