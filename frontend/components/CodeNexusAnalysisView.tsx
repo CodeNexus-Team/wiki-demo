@@ -27,6 +27,7 @@ interface CodeNexusAnalysisViewProps {
 
 const TITLE_MAP: Record<AnalysisType, string> = {
   [AnalysisType.DASHBOARD]: '仪表盘',
+  [AnalysisType.WIKI_BROWSER]: '生成Wiki',
   [AnalysisType.ARCHITECTURE]: '架构视图',
   [AnalysisType.API_ANALYSIS]: '接口分析',
   [AnalysisType.BUSINESS_FLOW]: '业务流',

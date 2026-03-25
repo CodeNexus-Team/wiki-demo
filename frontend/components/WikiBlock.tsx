@@ -208,8 +208,8 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
           : 'bg-red-50/50 border-red-200/50 opacity-60 hover:opacity-80 decoration-red-400';
       case 'modified':
         return isDarkMode
-          ? 'bg-amber-900/30 border-amber-700/60 hover:border-amber-600'
-          : 'bg-amber-50/50 border-amber-200/60 hover:border-amber-300';
+          ? 'bg-[#0d2818] border-green-700/60 hover:border-green-600'
+          : 'bg-green-50/60 border-green-200/60 hover:border-green-300';
       default:
         return isSelected
           ? isDarkMode
@@ -227,7 +227,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
     const badgeConfig = {
       inserted: { color: 'text-emerald-600 bg-emerald-100', icon: <Plus size={10} />, text: '新增' },
       deleted: { color: 'text-red-600 bg-red-100', icon: <Trash2 size={10} />, text: '删除' },
-      modified: { color: 'text-amber-600 bg-amber-100', icon: <FileDiff size={10} />, text: '修改' }
+      modified: { color: 'text-green-600 bg-green-100', icon: <FileDiff size={10} />, text: '修改' }
     };
     const config = badgeConfig[block.status];
 
@@ -587,8 +587,24 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
 
         {/* Original Content for Modified Blocks */}
         {block.status === 'modified' && block.originalContent && (
-          <div className="mb-2 opacity-50 hover:opacity-100 transition-opacity border-l-2 border-red-200 pl-3 text-sm bg-red-50/30 p-2 rounded-r-md line-through decoration-red-300/50 grayscale">
-             {renderContent(block.originalContent)}
+          <div className={`mb-3 border-l-4 pl-3 p-2 rounded-r-md line-through ${
+            isDarkMode
+              ? 'border-red-500 bg-red-900/40 text-red-300/80 decoration-red-400/60'
+              : 'border-red-400 bg-red-50 text-red-700/70 decoration-red-400/60'
+          }`}>
+            <div className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${isDarkMode ? 'text-red-400' : 'text-red-500'}`}>
+              原内容
+            </div>
+            {renderContent(block.originalContent)}
+          </div>
+        )}
+        {block.status === 'modified' && (
+          <div className={`border-l-4 pl-3 ${
+            isDarkMode ? 'border-green-500' : 'border-green-400'
+          }`}>
+            <div className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
+              新内容
+            </div>
           </div>
         )}
 

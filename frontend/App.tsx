@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
-import AnalysisView from './components/AnalysisView';
+import WikiBrowser from './components/WikiBrowser';
+import AnalysisView, { InitialWikiData } from './components/AnalysisView';
 import WikiHistoryPanel from './components/WikiHistoryPanel';
 import { AnalysisType, WikiHistoryRecord } from './types';
 import { WikiThemeContext, useWikiThemeState } from './hooks/useWikiTheme';
@@ -13,14 +14,15 @@ const App: React.FC = () => {
   const [selectedHistoryRecord, setSelectedHistoryRecord] = useState<WikiHistoryRecord | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
+  // WikiBrowser 点击文件后传给 AnalysisView 的初始数据
+  const [wikiBrowserInitData, setWikiBrowserInitData] = useState<InitialWikiData | null>(null);
+
   // 主题状态
   const themeState = useWikiThemeState();
   const { isDarkMode } = themeState;
 
   const handleSelectHistory = (record: WikiHistoryRecord) => {
-    // 设置选中的历史记录，AnalysisView 会监听并加载
     setSelectedHistoryRecord(record);
-    // Switch to the appropriate view if needed
     if (currentView === AnalysisType.DASHBOARD && (record.pagePath || (record.blocksCount ?? 0) > 0)) {
       setCurrentView(AnalysisType.ARCHITECTURE);
     }
@@ -36,6 +38,24 @@ const App: React.FC = () => {
     setIsHistoryPanelOpen(false);
   };
 
+  // WikiBrowser 中点击 wiki 文件 → 传入初始数据，走和 workflow 完成后一样的加载流程
+  const handleOpenWikiPage = useCallback((pagePath: string, allPages: string[]) => {
+    setWikiBrowserInitData({ pagePath, wikiPages: allPages });
+  }, []);
+
+  // 从 wiki 查看返回到列表
+  const handleBackToWikiBrowser = useCallback(() => {
+    setWikiBrowserInitData(null);
+  }, []);
+
+  // 切换侧边栏时，如果离开 WIKI_BROWSER，清除查看状态
+  const handleNavigate = useCallback((view: AnalysisType) => {
+    if (view !== AnalysisType.WIKI_BROWSER) {
+      setWikiBrowserInitData(null);
+    }
+    setCurrentView(view);
+  }, []);
+
   return (
     <WikiThemeContext.Provider value={themeState}>
       <div className={`flex h-screen font-sans transition-colors duration-300 ${
@@ -45,7 +65,7 @@ const App: React.FC = () => {
       }`}>
         <Sidebar
           currentView={currentView}
-          onNavigate={setCurrentView}
+          onNavigate={handleNavigate}
           wikiHistory={wikiHistory}
           onOpenHistory={() => setIsHistoryPanelOpen(true)}
           isCollapsed={isSidebarCollapsed}
@@ -62,6 +82,18 @@ const App: React.FC = () => {
             <div className="h-full overflow-y-auto scroll-smooth">
               <Dashboard isDarkMode={isDarkMode} />
             </div>
+          ) : currentView === AnalysisType.WIKI_BROWSER && !wikiBrowserInitData ? (
+            <WikiBrowser isDarkMode={isDarkMode} onOpenWikiPage={handleOpenWikiPage} />
+          ) : currentView === AnalysisType.WIKI_BROWSER && wikiBrowserInitData ? (
+            <AnalysisView
+              type={currentView}
+              wikiHistory={wikiHistory}
+              setWikiHistory={setWikiHistory}
+              selectedHistoryRecord={null}
+              onHistoryLoaded={() => setSelectedHistoryRecord(null)}
+              isSidebarCollapsed={isSidebarCollapsed}
+              initialWikiData={wikiBrowserInitData}
+            />
           ) : (
             <AnalysisView
               type={currentView}

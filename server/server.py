@@ -16,6 +16,7 @@ from backend_mock import (
     detailed_query_mock,
     expand_query_mock
 )
+from agent import run_detailed_query
 
 # 导入实际的 expand_query 实现
 #from fy.intent_understand.expand_query import expand_user_query
@@ -98,10 +99,18 @@ class InsertBlock(BaseModel):
     block: Dict[str, Any] = Field(..., description="要插入的 block 内容")
 
 
+class ReplaceBlock(BaseModel):
+    """替换块模型"""
+    target: str = Field(..., description="要替换的 block ID")
+    new_content: Dict[str, Any] = Field(..., description="新的内容，如 {markdown: '...'}")
+    source_ids: List[str] = Field(default=[], description="关联的源码 ID 列表")
+
+
 class PageDiffResponse(BaseModel):
     """页面差异响应模型（修改当前页面）"""
     insert_blocks: List[InsertBlock] = Field(default=[], description="要插入的 block 列表")
     delete_blocks: List[str] = Field(default=[], description="要删除的 block ID 列表")
+    replace_blocks: List[ReplaceBlock] = Field(default=[], description="要原地替换的 block 列表")
     insert_sources: List[PageSource] = Field(default=[], description="要插入的来源列表")
     delete_sources: List[str] = Field(default=[], description="要删除的来源 ID 列表")
 
@@ -174,7 +183,65 @@ def apply_changes(page_path: str, page_diff: Dict[str, Any], wiki_root: str) -> 
 
     blocks = page_data.get('markdown_content', [])
 
-    # 1. 删除 delete_blocks 中的块
+    # 1. 原地替换 replace_blocks（直接更新目标 block 的内容，不改变树结构）
+    def replace_block_content(block_list: list, target_id: str, new_content: dict, source_ids: list) -> bool:
+        for block in block_list:
+            if block.get("id") == target_id:
+                # 保留 block 的 type/id/title 等元数据，只替换内容
+                if block.get("type") == "text":
+                    block["content"] = new_content
+                    if source_ids:
+                        block["source_id"] = source_ids
+                elif block.get("type") == "section":
+                    # section 块：替换其子内容为一个新的 text block
+                    block["content"] = [{
+                        "type": "text",
+                        "id": f"NEW_{target_id}",
+                        "content": new_content,
+                        "source_id": source_ids,
+                    }]
+                return True
+            children = block.get("content")
+            if isinstance(children, list):
+                if replace_block_content(children, target_id, new_content, source_ids):
+                    return True
+        return False
+
+    for replace_item in page_diff.get("replace_blocks", []):
+        target_id = replace_item["target"]
+        success = replace_block_content(
+            blocks,
+            replace_item["target"],
+            replace_item["new_content"],
+            replace_item.get("source_ids", []),
+        )
+        print(f"  replace {target_id}: {'成功' if success else '未找到目标block'}")
+
+    # 2. 插入 insert_blocks
+    # 与前端逻辑一致：
+    # - 如果目标块是 section 类型：新块作为第一个子节点插入
+    # - 如果目标块是非 section 类型：新块作为下一个兄弟节点插入
+    def insert_after_block(block_list: list, after_id: str, new_block: dict) -> bool:
+        for i, block in enumerate(block_list):
+            if block.get("id") == after_id:
+                if block.get("type") == "section":
+                    if "content" not in block or not isinstance(block["content"], list):
+                        block["content"] = []
+                    block["content"].insert(0, new_block)
+                else:
+                    block_list.insert(i + 1, new_block)
+                return True
+            if "content" in block and isinstance(block["content"], list):
+                if insert_after_block(block["content"], after_id, new_block):
+                    return True
+        return False
+
+    for insert_item in page_diff.get("insert_blocks", []):
+        after_id = insert_item["after_block"]
+        new_block = insert_item["block"]
+        insert_after_block(blocks, after_id, new_block)
+
+    # 2. 再删除 delete_blocks
     delete_ids = set(page_diff.get("delete_blocks", []))
 
     def remove_blocks(block_list: list, ids_to_remove: set) -> list:
@@ -187,32 +254,6 @@ def apply_changes(page_path: str, page_diff: Dict[str, Any], wiki_root: str) -> 
         return result
 
     blocks = remove_blocks(blocks, delete_ids)
-
-    # 2. 插入 insert_blocks
-    # 与前端逻辑一致：
-    # - 如果目标块是 section 类型：新块作为第一个子节点插入
-    # - 如果目标块是非 section 类型：新块作为下一个兄弟节点插入
-    def insert_after_block(block_list: list, after_id: str, new_block: dict) -> bool:
-        for i, block in enumerate(block_list):
-            if block.get("id") == after_id:
-                if block.get("type") == "section":
-                    # section 类型：插入为第一个子节点
-                    if "content" not in block or not isinstance(block["content"], list):
-                        block["content"] = []
-                    block["content"].insert(0, new_block)
-                else:
-                    # 非 section 类型：插入为兄弟节点
-                    block_list.insert(i + 1, new_block)
-                return True
-            if "content" in block and isinstance(block["content"], list):
-                if insert_after_block(block["content"], after_id, new_block):
-                    return True
-        return False
-
-    for insert_item in page_diff.get("insert_blocks", []):
-        after_id = insert_item["after_block"]
-        new_block = insert_item["block"]
-        insert_after_block(blocks, after_id, new_block)
 
     # 3. 更新 sources
     sources = page_data.get("source_id", [])
@@ -235,7 +276,90 @@ def apply_changes(page_path: str, page_diff: Dict[str, Any], wiki_root: str) -> 
     }
 
 
+# ==================== 文件扫描函数 ====================
+
+def list_wiki_pages(wiki_root: str) -> List[Dict[str, Any]]:
+    """
+    扫描 wiki_result 目录，返回树状结构的 wiki 列表
+    复用 execute_workflow_mock 中的扫描逻辑，但返回树形结构
+    """
+    if os.path.isabs(wiki_root):
+        base_dir = wiki_root
+    else:
+        base_dir = os.path.join(os.path.dirname(__file__), wiki_root)
+
+    if not os.path.isdir(base_dir):
+        return []
+
+    def build_tree(dir_path: str, rel_prefix: str = "") -> List[Dict[str, Any]]:
+        items = []
+        try:
+            entries = sorted(os.listdir(dir_path))
+        except OSError:
+            return items
+
+        for entry in entries:
+            full_path = os.path.join(dir_path, entry)
+            rel_path = os.path.join(rel_prefix, entry) if rel_prefix else entry
+
+            if os.path.isdir(full_path):
+                children = build_tree(full_path, rel_path)
+                items.append({
+                    "name": entry,
+                    "path": rel_path,
+                    "type": "directory",
+                    "children": children,
+                })
+            elif entry.endswith(".json"):
+                items.append({
+                    "name": entry[:-5],
+                    "path": rel_path,
+                    "type": "file",
+                })
+        return items
+
+    return build_tree(base_dir)
+
+
 # ==================== API 路由 ====================
+
+@app.get("/api/list_wikis")
+async def list_wikis_api() -> List[Dict[str, Any]]:
+    """
+    获取所有已生成的 Wiki 列表（树状结构）
+    """
+    try:
+        wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+        return list_wiki_pages(wiki_root)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取 Wiki 列表失败: {str(e)}")
+
+
+@app.get("/api/scan_wikis")
+async def scan_wikis_api() -> ExecuteWorkflowResponse:
+    """
+    直接扫描 wiki 目录，返回 wiki_root 和所有页面路径（无需查询）
+    """
+    try:
+        wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+
+        if os.path.isabs(wiki_root):
+            base_dir = wiki_root
+        else:
+            base_dir = os.path.join(os.path.dirname(__file__), wiki_root)
+
+        import glob
+        pattern = os.path.join(base_dir, "**", "*.json")
+        json_files = glob.glob(pattern, recursive=True)
+        wiki_pages = [os.path.relpath(f, base_dir) for f in json_files]
+
+        return ExecuteWorkflowResponse(
+            wiki_root=wiki_root,
+            wiki_pages=wiki_pages,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"扫描 Wiki 目录失败: {str(e)}")
+
 
 @app.post("/api/user_query")
 async def user_query(
@@ -308,17 +432,38 @@ async def detailed_query(
     """
     try:
         print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, user_query={request.user_query}")
-        result = detailed_query_mock(
+        wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+
+        result = await run_detailed_query(
             request.page_path,
             request.block_ids,
             request.user_query,
-            wiki_root=os.environ.get("WIKI_ROOT_PATH", "")
+            wiki_root=wiki_root,
         )
         print(f"详细查询结果: {result}")
+
         if "new_page_path" in result:
+            # 写入新页面文件
+            new_page_path = result["new_page_path"].lstrip("/")
+            if os.path.isabs(wiki_root):
+                new_json_path = os.path.join(wiki_root, new_page_path)
+            else:
+                new_json_path = os.path.join(os.path.dirname(__file__), wiki_root, new_page_path)
+
+            os.makedirs(os.path.dirname(new_json_path), exist_ok=True)
+            new_file_content = {
+                "markdown_content": result["new_page"]["content"],
+                "source_id": result["new_page"]["source"]
+            }
+            with open(new_json_path, 'w', encoding='utf-8') as f:
+                json.dump(new_file_content, f, ensure_ascii=False, indent=2)
+            print(f"新页面已写入: {new_json_path}")
+
             return CreatePageResponse(**result)
         else:
             return PageDiffResponse(**result)
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"详细查询失败: {str(e)}")
 
@@ -331,7 +476,11 @@ async def apply_changes_api(request: ApplyChangesRequest) -> Dict[str, Any]:
     用户确认变更后，将 page_diff 应用到对应的页面文件。
     """
     try:
-        print(f"收到应用变更请求: page_path={request.page_path}")
+        page_diff_data = request.page_diff.model_dump()
+        print(f"收到应用变更请求: page_path={request.page_path}, "
+              f"replace_blocks={len(page_diff_data.get('replace_blocks', []))}, "
+              f"insert_blocks={len(page_diff_data.get('insert_blocks', []))}, "
+              f"delete_blocks={len(page_diff_data.get('delete_blocks', []))}")
         result = apply_changes(
             request.page_path,
             request.page_diff.model_dump(),

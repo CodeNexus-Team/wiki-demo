@@ -95,12 +95,35 @@ export function useDiffMode(options: UseDiffModeOptions): UseDiffModeReturn {
 
     let newBlocks = [...currentBlocks];
 
-    // Mark blocks to delete
+    // 1. Replace blocks in-place
+    if (response.replace_blocks) {
+      for (const replacement of response.replace_blocks) {
+        const replaceInTree = (blocks: WikiBlock[]): WikiBlock[] => {
+          return blocks.map(block => {
+            if (block.id === replacement.target) {
+              return {
+                ...block,
+                content: replacement.new_content.markdown,
+                originalContent: block.content,
+                status: 'modified' as const,
+              };
+            }
+            if (block.children && block.children.length > 0) {
+              return { ...block, children: replaceInTree(block.children) };
+            }
+            return block;
+          });
+        };
+        newBlocks = replaceInTree(newBlocks);
+      }
+    }
+
+    // 2. Mark blocks to delete
     response.delete_blocks.forEach(blockId => {
       newBlocks = markBlockAsDeleted(newBlocks, blockId);
     });
 
-    // Insert new blocks
+    // 3. Insert new blocks
     for (const insertion of response.insert_blocks) {
       const tempPage = {
         content: [insertion.block],

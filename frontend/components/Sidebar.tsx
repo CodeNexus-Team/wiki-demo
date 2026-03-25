@@ -2,6 +2,7 @@
 import React from 'react';
 import {
   LayoutDashboard,
+  BookOpen,
   Network,
   Server,
   GitBranch,
@@ -25,6 +26,7 @@ interface SidebarProps {
 
 const NAV_ITEMS: NavItem[] = [
   { id: AnalysisType.DASHBOARD, label: '仪表盘', icon: <LayoutDashboard size={18} />, description: '概览' },
+  { id: AnalysisType.WIKI_BROWSER, label: '生成Wiki', icon: <BookOpen size={18} />, description: '浏览Wiki' },
   { id: AnalysisType.ARCHITECTURE, label: '架构视图', icon: <Network size={18} />, description: '系统模块' },
   { id: AnalysisType.API_ANALYSIS, label: '接口分析', icon: <Server size={18} />, description: 'API 契约' },
   { id: AnalysisType.BUSINESS_FLOW, label: '业务流', icon: <GitBranch size={18} />, description: '核心流程' },

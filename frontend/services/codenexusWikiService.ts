@@ -8,7 +8,8 @@ import {
   ModifyPageResponse,
   NewPageResponse,
   ExpandedQuestion,
-  WikiPage
+  WikiPage,
+  WikiTreeNode
 } from '../types';
 import { wikiPageCache } from './wikiPageCache';
 
@@ -327,6 +328,38 @@ class CodeNexusWikiService {
     } catch (error) {
       console.error('应用变更失败:', error);
       throw new Error(`应用变更失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * 直接扫描 wiki 目录，返回 wiki_root 和所有页面路径（无需查询）
+   */
+  async scanWikis(): Promise<ExecuteWorkflowResponse> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/scan_wikis`);
+      if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('[CodeNexus Service] 扫描 Wiki 目录失败:', error);
+      throw new Error(`扫描 Wiki 目录失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * 获取所有已生成的 Wiki 列表（树状结构）
+   */
+  async listWikis(): Promise<WikiTreeNode[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/list_wikis`);
+      if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('[CodeNexus Service] 获取 Wiki 列表失败:', error);
+      throw new Error(`获取 Wiki 列表失败: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

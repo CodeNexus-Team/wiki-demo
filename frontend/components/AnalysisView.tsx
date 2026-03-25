@@ -31,6 +31,7 @@ import { MermaidModal } from './mermaid/MermaidModal';
 import {
   Loader2,
   ArrowUp,
+  ArrowLeft,
   Sparkles,
   Eraser,
   ChevronUp,
@@ -41,6 +42,11 @@ import {
   Moon
 } from 'lucide-react';
 
+export interface InitialWikiData {
+  pagePath: string;
+  wikiPages: string[];
+}
+
 interface AnalysisViewProps {
   type: AnalysisType;
   wikiHistory: WikiHistoryRecord[];
@@ -48,10 +54,13 @@ interface AnalysisViewProps {
   selectedHistoryRecord: WikiHistoryRecord | null;
   onHistoryLoaded: () => void;
   isSidebarCollapsed?: boolean;
+  onBack?: () => void;
+  initialWikiData?: InitialWikiData | null;
 }
 
 const TITLE_MAP: Record<AnalysisType, string> = {
   [AnalysisType.DASHBOARD]: '仪表盘',
+  [AnalysisType.WIKI_BROWSER]: '生成Wiki',
   [AnalysisType.ARCHITECTURE]: '架构视图',
   [AnalysisType.API_ANALYSIS]: '接口分析',
   [AnalysisType.BUSINESS_FLOW]: '业务流',
@@ -59,7 +68,7 @@ const TITLE_MAP: Record<AnalysisType, string> = {
   [AnalysisType.DATABASE]: '数据库模型',
 };
 
-const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiHistory, selectedHistoryRecord, onHistoryLoaded, isSidebarCollapsed = false }) => {
+const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiHistory, selectedHistoryRecord, onHistoryLoaded, isSidebarCollapsed = false, onBack, initialWikiData }) => {
   // Theme
   const { isDarkMode, toggleDarkMode } = useWikiTheme();
 
@@ -276,9 +285,37 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     loadHistoryRecord();
   }, [selectedHistoryRecord, onHistoryLoaded, setCurrentPagePath, setWikiPages, setSelectedBlockIds, setIsDiffMode, setIsChatExpanded, clearTabs, openTab]);
 
+  // Load initial wiki data (from WikiBrowser click, same flow as post-workflow)
+  useEffect(() => {
+    if (!initialWikiData) return;
+
+    const loadInitialWiki = async () => {
+      setWikiPages(initialWikiData.wikiPages);
+      setCurrentPagePath(initialWikiData.pagePath);
+      setSelectedBlockIds(new Set());
+      setIsDiffMode(false);
+      setIsChatExpanded(false);
+
+      try {
+        const wikiPage = await codenexusWikiService.fetchPage(initialWikiData.pagePath);
+        const parsedBlocks = parseWikiPageToBlocks(wikiPage.content, wikiPage.source);
+        setBlocks(parsedBlocks);
+        clearTabs();
+        openTab(initialWikiData.pagePath, parsedBlocks);
+      } catch (error) {
+        console.error('[InitialWiki] Failed to fetch page:', error);
+        setBlocks([]);
+      }
+    };
+
+    loadInitialWiki();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialWikiData]);
+
   // Reset state on type change
   useEffect(() => {
     if (selectedHistoryRecord) return;
+    if (initialWikiData) return;
     if (justLoadedHistoryRef.current) {
       justLoadedHistoryRef.current = false;
       return;
@@ -294,14 +331,15 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     closeSourcePanel();
     setSelectedBlockIds(new Set());
     setIsDiffMode(false);
-  }, [type, selectedHistoryRecord, clearHistory, setIsChatExpanded, closeSourcePanel, setSelectedBlockIds, setIsDiffMode]);
+  }, [type, selectedHistoryRecord, initialWikiData, clearHistory, setIsChatExpanded, closeSourcePanel, setSelectedBlockIds, setIsDiffMode]);
 
-  // Scroll to content end when blocks change
+  // Scroll to content end when blocks change (skip for direct wiki loading)
   useEffect(() => {
+    if (initialWikiData) return;
     if (blocks.length > 0 && chatHistory.length === 0) {
       contentEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [blocks, chatHistory.length]);
+  }, [blocks, chatHistory.length, initialWikiData]);
 
   // Scroll highlighted block into view
   useEffect(() => {
@@ -699,6 +737,22 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
         {blocks.length > 0 && (
           <div className="flex flex-col flex-1 min-h-0 px-4 md:px-12 pt-6">
+            {/* 返回按钮（从 WikiBrowser 进入时显示） */}
+            {onBack && (
+              <div className="mb-3 flex-shrink-0">
+                <button
+                  onClick={onBack}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] transition-colors ${
+                    isDarkMode
+                      ? 'hover:bg-[#21262d] text-[#7d8590] hover:text-[#e6edf3]'
+                      : 'hover:bg-[rgba(0,0,0,0.04)] text-[#86868b] hover:text-[#1d1d1f]'
+                  }`}
+                >
+                  <ArrowLeft size={16} />
+                  返回 Wiki 列表
+                </button>
+              </div>
+            )}
             {/* Unified Card Container */}
             <div className={`
               flex flex-col flex-1 min-h-0 rounded-xl border backdrop-blur-xl overflow-hidden

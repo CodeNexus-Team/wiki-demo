@@ -87,6 +87,7 @@ export const AVAILABLE_MODELS = [
 ];
 
 export const SUGGESTIONS: Record<AnalysisType, string[]> = {
+  [AnalysisType.WIKI_BROWSER]: [],
   [AnalysisType.DASHBOARD]: [
     "生成当前系统的整体健康状况报告",
     "列出代码量(LOC)最多的前三个模块",

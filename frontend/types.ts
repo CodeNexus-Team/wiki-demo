@@ -2,11 +2,19 @@ import React from 'react';
 
 export enum AnalysisType {
   DASHBOARD = 'DASHBOARD',
+  WIKI_BROWSER = 'WIKI_BROWSER',
   ARCHITECTURE = 'ARCHITECTURE',
   API_ANALYSIS = 'API_ANALYSIS',
   BUSINESS_FLOW = 'BUSINESS_FLOW',
   CONTROL_FLOW = 'CONTROL_FLOW',
   DATABASE = 'DATABASE'
+}
+
+export interface WikiTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: WikiTreeNode[];
 }
 
 export interface NavItem {
@@ -164,6 +172,11 @@ export interface ModifyPageResponse {
     block: WikiPageContent;
   }>;
   delete_blocks: string[];
+  replace_blocks?: Array<{
+    target: string;
+    new_content: { markdown: string; mermaid?: string };
+    source_ids: string[];
+  }>;
   insert_sources: WikiSource[];
   delete_sources: string[];
 }
