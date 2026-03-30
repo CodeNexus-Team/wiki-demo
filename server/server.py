@@ -1,11 +1,17 @@
 from typing import List, Dict, Any
 import sys
 import json
+import asyncio
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import os
+from dotenv import load_dotenv
+
+# 加载 .env 环境变量
+load_dotenv(Path(__file__).parent / ".env")
 
 # 添加父目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -421,51 +427,76 @@ async def fetch_page_api(request: FetchPageRequest) -> FetchPageResponse:
 @app.post("/api/detailed_query")
 async def detailed_query(
     request: DetailedQueryRequest,
-) -> PageDiffResponse | CreatePageResponse:
+):
     """
-    详细查询接口
+    详细查询接口（SSE 流式响应）
 
-    用户选中若干 block 并输入指令，后端根据这些信息细化 wiki 内容。
-    返回两种格式之一：
-    - PageDiffResponse：修改当前页面的 block
-    - CreatePageResponse：新增页面并返回页面内容
+    通过 Server-Sent Events 实时推送进度，最后一个事件为完整结果。
+    事件格式：
+    - progress 事件: {"type": "progress", "message": "..."}
+    - result   事件: {"type": "result",   "data": { ...PageDiffResponse 或 CreatePageResponse... }}
+    - error    事件: {"type": "error",    "message": "..."}
     """
-    try:
-        print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, user_query={request.user_query}")
-        wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+    async def event_stream():
+        progress_queue: asyncio.Queue[str] = asyncio.Queue()
 
-        result = await run_detailed_query(
-            request.page_path,
-            request.block_ids,
-            request.user_query,
-            wiki_root=wiki_root,
-        )
-        print(f"详细查询结果: {result}")
+        def on_progress(msg: str):
+            progress_queue.put_nowait(msg)
 
-        if "new_page_path" in result:
-            # 写入新页面文件
-            new_page_path = result["new_page_path"].lstrip("/")
-            if os.path.isabs(wiki_root):
-                new_json_path = os.path.join(wiki_root, new_page_path)
-            else:
-                new_json_path = os.path.join(os.path.dirname(__file__), wiki_root, new_page_path)
+        try:
+            print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, user_query={request.user_query}")
+            wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
 
-            os.makedirs(os.path.dirname(new_json_path), exist_ok=True)
-            new_file_content = {
-                "markdown_content": result["new_page"]["content"],
-                "source_id": result["new_page"]["source"]
-            }
-            with open(new_json_path, 'w', encoding='utf-8') as f:
-                json.dump(new_file_content, f, ensure_ascii=False, indent=2)
-            print(f"新页面已写入: {new_json_path}")
+            # Start the agent in a background task
+            task = asyncio.create_task(run_detailed_query(
+                request.page_path,
+                request.block_ids,
+                request.user_query,
+                wiki_root=wiki_root,
+                on_progress=on_progress,
+            ))
 
-            return CreatePageResponse(**result)
-        else:
-            return PageDiffResponse(**result)
-    except TimeoutError as e:
-        raise HTTPException(status_code=504, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"详细查询失败: {str(e)}")
+            # Drain progress events while the agent is running
+            while not task.done():
+                try:
+                    msg = await asyncio.wait_for(progress_queue.get(), timeout=0.3)
+                    yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    continue
+
+            # Drain any remaining progress events
+            while not progress_queue.empty():
+                msg = progress_queue.get_nowait()
+                yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+
+            result = task.result()
+            print(f"详细查询结果: {result}")
+
+            if "new_page_path" in result:
+                # 写入新页面文件
+                new_page_path = result["new_page_path"].lstrip("/")
+                if os.path.isabs(wiki_root):
+                    new_json_path = os.path.join(wiki_root, new_page_path)
+                else:
+                    new_json_path = os.path.join(os.path.dirname(__file__), wiki_root, new_page_path)
+
+                os.makedirs(os.path.dirname(new_json_path), exist_ok=True)
+                new_file_content = {
+                    "markdown_content": result["new_page"]["content"],
+                    "source_id": result["new_page"]["source"]
+                }
+                with open(new_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(new_file_content, f, ensure_ascii=False, indent=2)
+                print(f"新页面已写入: {new_json_path}")
+
+            yield f"data: {json.dumps({'type': 'result', 'data': result}, ensure_ascii=False)}\n\n"
+
+        except TimeoutError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'详细查询失败: {str(e)}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/apply_changes")

@@ -18,7 +18,7 @@ interface UseDiffModeReturn {
   originalBlocks: WikiBlock[];
   pendingPageDiff: ModifyPageResponse | null;
 
-  enterDiffMode: (modifiedBlocks: WikiBlock[], pendingDiff?: ModifyPageResponse) => void;
+  enterDiffMode: (modifiedBlocks: WikiBlock[], pendingDiff?: ModifyPageResponse, snapshotBlocks?: WikiBlock[]) => void;
   applyChanges: () => Promise<void>;
   discardChanges: () => void;
   setIsDiffMode: React.Dispatch<React.SetStateAction<boolean>>;
@@ -34,8 +34,10 @@ export function useDiffMode(options: UseDiffModeOptions): UseDiffModeReturn {
   const [originalBlocks, setOriginalBlocks] = useState<WikiBlock[]>([]);
   const [pendingPageDiff, setPendingPageDiff] = useState<ModifyPageResponse | null>(null);
 
-  const enterDiffMode = useCallback((modifiedBlocks: WikiBlock[], pendingDiff?: ModifyPageResponse) => {
-    setOriginalBlocks([...blocks]);
+  const enterDiffMode = useCallback((modifiedBlocks: WikiBlock[], pendingDiff?: ModifyPageResponse, snapshotBlocks?: WikiBlock[]) => {
+    // Use explicitly provided snapshot blocks if available, otherwise fall back to current blocks.
+    // This avoids stale closure issues when the user switches pages while a query is in flight.
+    setOriginalBlocks([...(snapshotBlocks ?? blocks)]);
     setBlocks(modifiedBlocks);
     setIsDiffMode(true);
     if (pendingDiff) {

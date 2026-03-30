@@ -199,7 +199,8 @@ class CodeNexusWikiService {
   async detailedQuery(
     pagePath: string,
     blockIds: string[],
-    userQuery: string
+    userQuery: string,
+    onProgress?: (message: string) => void
   ): Promise<ModifyPageResponse | NewPageResponse> {
     const request: DetailedQueryRequest = {
       page_path: pagePath,
@@ -207,7 +208,7 @@ class CodeNexusWikiService {
       user_query: userQuery
     };
 
-    console.log('[CodeNexus Service] 调用 detailedQuery API:', {
+    console.log('[CodeNexus Service] 调用 detailedQuery API (SSE):', {
       url: `${this.baseUrl}/api/detailed_query`,
       request
     });
@@ -227,18 +228,55 @@ class CodeNexusWikiService {
         throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json();
+      // Read SSE stream
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('无法读取响应流');
 
-      console.log('[CodeNexus Service] detailedQuery API 响应数据:', data);
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalResult: ModifyPageResponse | NewPageResponse | null = null;
 
-      // 根据返回的字段判断是修改页面还是新增页面
-      if ('new_page_path' in data) {
-        console.log('[CodeNexus Service] 响应类型: NewPageResponse (新增页面)');
-        return data as NewPageResponse;
-      } else {
-        console.log('[CodeNexus Service] 响应类型: ModifyPageResponse (修改页面)');
-        return data as ModifyPageResponse;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (!payload) continue;
+
+          try {
+            const event = JSON.parse(payload);
+
+            if (event.type === 'progress') {
+              console.log('[CodeNexus Service] 进度:', event.message);
+              onProgress?.(event.message);
+            } else if (event.type === 'result') {
+              const data = event.data;
+              console.log('[CodeNexus Service] detailedQuery 结果:', data);
+              if ('new_page_path' in data) {
+                finalResult = data as NewPageResponse;
+              } else {
+                finalResult = data as ModifyPageResponse;
+              }
+            } else if (event.type === 'error') {
+              throw new Error(event.message);
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message !== payload) throw e;
+            console.warn('[CodeNexus Service] SSE 解析跳过:', payload);
+          }
+        }
       }
+
+      if (!finalResult) {
+        throw new Error('未收到查询结果');
+      }
+      return finalResult;
     } catch (error) {
       console.error('详细查询失败:', error);
       throw new Error(`详细查询失败: ${error instanceof Error ? error.message : String(error)}`);

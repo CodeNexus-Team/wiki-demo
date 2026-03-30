@@ -21,6 +21,8 @@ interface UseWikiPagesReturn {
   handlePageSwitch: (pagePath: string) => Promise<WikiBlock[] | null>;
   loadPage: (pagePath: string) => Promise<WikiBlock[]>;
   addPage: (pagePath: string) => void;
+  /** Invalidate any in-flight page load so its result is discarded. */
+  cancelPendingLoad: () => void;
 }
 
 export function useWikiPages(options: UseWikiPagesOptions = {}): UseWikiPagesReturn {
@@ -31,6 +33,11 @@ export function useWikiPages(options: UseWikiPagesOptions = {}): UseWikiPagesRet
   const [isLoadingPage, setIsLoadingPage] = useState(false);
   const [isNavigatorVisible, setIsNavigatorVisible] = useState(true);
 
+  // Track the latest requested page to handle rapid switches (discard stale loads)
+  const latestRequestedPageRef = useRef<string>('');
+  // Track currently in-flight page to deduplicate concurrent loads of the same page
+  const loadingPageRef = useRef<string>('');
+
   const loadPage = useCallback(async (pagePath: string): Promise<WikiBlock[]> => {
     const wikiPage = await codenexusWikiService.fetchPage(pagePath);
     const parsedBlocks = parseWikiPageToBlocks(wikiPage.content, wikiPage.source);
@@ -38,13 +45,23 @@ export function useWikiPages(options: UseWikiPagesOptions = {}): UseWikiPagesRet
   }, []);
 
   const handlePageSwitch = useCallback(async (pagePath: string): Promise<WikiBlock[] | null> => {
-    if (pagePath === currentPagePath || isLoadingPage) return null;
+    if (pagePath === currentPagePath) return null;
+    // Deduplicate: skip if this exact page is already being loaded
+    if (loadingPageRef.current === pagePath) return null;
 
+    latestRequestedPageRef.current = pagePath;
+    loadingPageRef.current = pagePath;
     setIsLoadingPage(true);
     console.log('[useWikiPages] Switching page:', { from: currentPagePath, to: pagePath });
 
     try {
       const parsedBlocks = await loadPage(pagePath);
+
+      // Discard result if user already requested a different page or load was cancelled
+      if (latestRequestedPageRef.current !== pagePath) {
+        console.log('[useWikiPages] Discarding stale page load:', pagePath, '(latest:', latestRequestedPageRef.current, ')');
+        return null;
+      }
 
       setCurrentPagePath(pagePath);
       onPageLoaded?.(parsedBlocks, pagePath);
@@ -68,9 +85,24 @@ export function useWikiPages(options: UseWikiPagesOptions = {}): UseWikiPagesRet
       console.error('[useWikiPages] Page switch failed:', error);
       return null;
     } finally {
-      setIsLoadingPage(false);
+      if (loadingPageRef.current === pagePath) {
+        loadingPageRef.current = '';
+      }
+      // Only clear loading if this is still the latest request
+      if (latestRequestedPageRef.current === pagePath) {
+        setIsLoadingPage(false);
+      }
     }
-  }, [currentPagePath, isLoadingPage, loadPage, onPageLoaded, mainContentRef]);
+  }, [currentPagePath, loadPage, onPageLoaded, mainContentRef]);
+
+  // Invalidate any in-flight page load so its onPageLoaded / setCurrentPagePath
+  // won't fire, preventing it from overwriting state set by other async operations
+  // (e.g. detailedQuery entering diff mode).
+  const cancelPendingLoad = useCallback(() => {
+    latestRequestedPageRef.current = '';
+    loadingPageRef.current = '';
+    setIsLoadingPage(false);
+  }, []);
 
   const addPage = useCallback((pagePath: string) => {
     setWikiPages(prev => {
@@ -90,5 +122,6 @@ export function useWikiPages(options: UseWikiPagesOptions = {}): UseWikiPagesRet
     handlePageSwitch,
     loadPage,
     addPage,
+    cancelPendingLoad,
   };
 }

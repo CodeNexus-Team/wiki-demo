@@ -128,10 +128,10 @@ const WikiContentInner: React.FC<WikiContentProps> = ({
       ${isDiffMode ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-transparent' : ''}
       relative flex overflow-hidden flex-1
     `}>
-      {/* Loading Overlay */}
+      {/* Loading Overlay - does not block tab bar or navigator interaction */}
       {isLoadingPage && (
-        <div className={`absolute inset-0 backdrop-blur-sm rounded-[2.5rem] flex items-center justify-center z-10 ${
-          isDarkMode ? 'bg-[#0d1117]/80' : 'bg-white/80'
+        <div className={`absolute inset-0 backdrop-blur-sm rounded-[2.5rem] flex items-center justify-center z-10 pointer-events-none ${
+          isDarkMode ? 'bg-[#0d1117]/60' : 'bg-white/60'
         }`}>
           <div className={`flex items-center gap-3 ${variant === 'orange' ? 'text-orange-600' : isDarkMode ? 'text-[#58a6ff]' : 'text-blue-600'}`}>
             <Loader2 size={20} className="animate-spin" />

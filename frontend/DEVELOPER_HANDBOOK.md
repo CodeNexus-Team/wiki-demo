@@ -2,8 +2,8 @@
 
 > 智能代码分析与可视化 WIKI 系统 - 完整开发指南
 
-**版本**: v2.4
-**最后更新**: 2026-02-08
+**版本**: v2.5
+**最后更新**: 2026-03-27
 
 ---
 
@@ -23,6 +23,9 @@
 - [导航栏大纲视图](#导航栏大纲视图)
 - [Wiki 生成历史管理](#wiki-生成历史管理)
 - [Wiki 页面多标签页](#wiki-页面多标签页)
+- [Wiki 浏览器](#wiki-浏览器)
+- [Mermaid 图表编辑器](#mermaid-图表编辑器)
+- [页面缓存服务](#页面缓存服务)
 - [开发指南](#开发指南)
 - [故障排查](#故障排查)
 
@@ -36,17 +39,19 @@ CodeNexus.AI 是一个基于 AI 的代码分析和文档生成工具，支持双
 
 | 特性 | 说明 |
 |------|------|
-| 6 大分析视图 | 架构视图、API 分析、业务流程、控制流、数据库设计、仪表盘 |
+| 7 大分析视图 | 架构视图、API 分析、业务流程、控制流、数据库设计、仪表盘、Wiki 浏览器 |
 | 双 AI 引擎 | Gemini（快速）+ CodeNexus Wiki（精准） |
 | 智能 WIKI 系统 | 文档拆解为可操作的"原子块"，支持块级选择和修改 |
 | 树形结构 | 支持层级展示、折叠/展开、递归渲染 |
-| 交互式图表 | Mermaid 图表节点可直接关联源代码位置，点击后高亮对应节点并自动居中 |
+| 交互式图表 | Mermaid 图表节点可直接关联源代码位置，点击后高亮对应节点并自动居中，支持 Monaco 编辑器实时编辑 |
 | 实时 Diff 系统 | 可视化展示新增、修改、删除的内容 |
 | 多页面导航 | 支持多 Wiki 页面的树形导航和切换，大纲视图按标题层级显示 |
 | 页面标签栏 | VSCode 风格的页面标签栏，支持多页面快速切换、关闭，每个标签保持独立状态 |
 | 可调整布局 | 聊天面板、导航栏、源代码面板均支持拖拽调整大小，内容区域自适应 |
 | 源代码联动 | 查看源代码时自动高亮对应的 WikiBlock 和 Mermaid 节点 |
 | 历史记录管理 | 自动保存生成历史，支持快速恢复、删除和清空，侧边栏一键访问 |
+| Wiki 浏览器 | 扫描后端已生成的 Wiki，列表展示所有 Wiki 页面，入口级浏览 |
+| 页面缓存 | 基于 localStorage 的 LRU 缓存（最大 1000 页），自动淘汰最久未用页面 |
 
 ---
 
@@ -66,9 +71,13 @@ CodeNexus.AI 是一个基于 AI 的代码分析和文档生成工具，支持双
 - **@google/genai ^1.30.0** - Google Gemini AI SDK
 - **CodeNexus Wiki API** - 自研代码分析引擎
 
+### 代码编辑
+- **@monaco-editor/react ^4.7.0** - Monaco 代码编辑器（Mermaid 图表编辑）
+
 ### 数据可视化
 - **Mermaid.js ^11.12.1** - 流程图、架构图、时序图
 - **Recharts ^3.4.1** - 统计图表
+- **D3.js ^7.9.0** - 数据可视化
 
 ### Markdown 生态
 - **react-markdown ^10.1.0** - Markdown 渲染
@@ -85,12 +94,14 @@ codewiki-ai/
 │   ├── AnalysisView.tsx          # 核心视图：聊天、Wiki 渲染、状态管理
 │   ├── CodeNexusAnalysisView.tsx # CodeNexus 专用视图
 │   ├── Dashboard.tsx             # 仪表盘：统计图表
+│   ├── WikiBrowser.tsx           # Wiki 浏览器：扫描后端 Wiki 目录列表（v2.5 新增）
 │   ├── Sidebar.tsx               # 侧边栏导航（含历史记录入口）
 │   ├── WikiBlock.tsx             # 原子块渲染器（支持递归、折叠、三点菜单、高亮、Neo4j ID 卡片）
 │   ├── WikiPageNavigator.tsx     # 多页面树形导航器（可调整大小、结构导航、层级标题）
 │   ├── WikiHistoryPanel.tsx      # Wiki 生成历史面板（侧边栏滑入）
 │   ├── PageTabBar.tsx            # Wiki 页面标签栏（v2.3 新增，VSCode 风格多标签页）
 │   ├── Mermaid.tsx               # Mermaid 图表封装（支持节点高亮、subgraph 高亮、Neo4j ID 显示）
+│   ├── MarkdownRenderer.tsx      # Markdown 到 React 渲染组件（v2.5 新增）
 │   ├── SourceCodePanel.tsx       # 源代码阅读器（可调整宽度、联动高亮）
 │   ├── QuestionSelector.tsx      # CodeNexus 问题选择器（可调整大小）
 │   │
@@ -106,8 +117,16 @@ codewiki-ai/
 │   │   ├── WikiContent.tsx       # Wiki 内容区域
 │   │   └── index.ts
 │   │
-│   └── mermaid/                  # Mermaid 组件（v2.1 重构）
-│       ├── MermaidModal.tsx      # Mermaid 模态框
+│   ├── mermaid/                  # Mermaid 组件（v2.1 重构）
+│   │   ├── MermaidModal.tsx      # Mermaid 模态框
+│   │   ├── MermaidEditModal.tsx  # Mermaid 编辑模态框（v2.5 新增）
+│   │   └── index.ts
+│   │
+│   └── mermaid-editor/           # Mermaid 编辑器组件（v2.5 新增）
+│       ├── MermaidEditor.tsx     # Monaco 代码编辑器主组件
+│       ├── EditorPanel.tsx       # 编辑器面板（左侧）
+│       ├── PreviewPanel.tsx      # 实时预览面板（右侧）
+│       ├── ToolBar.tsx           # 编辑器工具栏
 │       └── index.ts
 │
 ├── config/                        # 配置文件（v2.2 新增）
@@ -122,12 +141,15 @@ codewiki-ai/
 │   ├── useWikiTheme.ts           # Wiki 主题管理（v2.2 新增）
 │   ├── usePageTabs.ts            # Wiki 页面标签管理（v2.3 新增）
 │   ├── useMermaidModal.ts        # Mermaid 模态框（仅 AnalysisView）
+│   ├── useMermaidEditor.ts       # Mermaid 编辑器状态管理（v2.5 新增）
+│   ├── useSvgDrag.ts             # SVG 拖拽交互（v2.5 新增）
 │   ├── useResizablePanel.ts      # 通用可调整大小面板
 │   └── index.ts
 │
 ├── services/
 │   ├── geminiService.ts          # Gemini AI 服务层
-│   └── codenexusWikiService.ts   # CodeNexus API 服务层
+│   ├── codenexusWikiService.ts   # CodeNexus API 服务层
+│   └── wikiPageCache.ts          # Wiki 页面 LRU 缓存（v2.5 新增，localStorage 持久化）
 │
 ├── utils/
 │   ├── markdownParser.ts         # Markdown -> WikiBlock 解析器
@@ -156,6 +178,7 @@ App
 ├── WikiHistoryPanel (历史记录面板，全局渲染)
 └── <main>
     ├── Dashboard (仪表盘)
+    ├── WikiBrowser (Wiki 浏览器)
     └── AnalysisView (分析视图)
         ├── PageTabBar (页面标签栏，v2.3 新增)
         ├── WikiPageNavigator (多页面导航)
@@ -353,6 +376,24 @@ POST { page_path: "...", page_diff: ModifyPageResponse }
 
 **说明**：用户确认变更后调用此接口，将 `page_diff` 应用到对应的页面文件。详细查询接口只返回预览数据，不会修改文件。
 
+#### 5. 扫描 Wiki 列表 `/api/scan_wikis`（v2.5 新增）
+
+```typescript
+GET /api/scan_wikis
+→ { wikis: string[] }  // 所有已生成的 Wiki 路径列表
+```
+
+**说明**：扫描后端所有已生成的 Wiki 文件，供 WikiBrowser 展示。
+
+#### 6. Wiki 树形列表 `/api/list_wikis`（v2.5 新增）
+
+```typescript
+GET /api/list_wikis
+→ { tree: WikiTreeNode[] }  // Wiki 目录树形结构
+```
+
+**说明**：以树形结构返回所有 Wiki 页面的目录层级，用于 WikiBrowser 的导航展示。
+
 ### 响应类型
 
 ```typescript
@@ -382,6 +423,8 @@ interface NewPageResponse {
 | `detailed_query_mock` | backend_mock.py | Mock | 待接入 AI 工作流 |
 | `fetch_page` | server.py | **真实实现** | 纯文件读取操作 |
 | `apply_changes` | server.py | **真实实现** | 纯文件修改操作 |
+| `scan_wikis` | server.py | **真实实现** | 扫描已生成的 Wiki 目录（v2.5 新增） |
+| `list_wikis` | server.py | **真实实现** | 返回 Wiki 树形目录结构（v2.5 新增） |
 
 `fetch_page` 和 `apply_changes` 是真实的文件操作逻辑，不依赖 AI。即使将来接入实际的 AI 工作流，这两个函数的逻辑也保持不变。
 
@@ -713,34 +756,15 @@ const formatTime = (timestamp: number) => {
 2. 提升 z-index：背景遮罩 z-[60]，面板 z-[70]
 3. 确保在所有页面（包括仪表盘）都能正常显示
 
-### 持久化建议
+### 持久化现状
 
-当前实现使用内存存储（React state），页面刷新后数据丢失。建议添加 LocalStorage 持久化：
+| 数据 | 存储方式 | 持久化 |
+|------|---------|--------|
+| Wiki 页面缓存 | 内存 Map（`wikiPageCache`） | 否，页面刷新后清空 |
+| 主题偏好 | localStorage（`wiki-theme-id`、`wiki-dark-mode`） | 是 |
+| 生成历史 | React state（`wikiHistory`） | 否，页面刷新后丢失 |
 
-```typescript
-// App.tsx
-const [wikiHistory, setWikiHistory] = useState<WikiHistoryRecord[]>(() => {
-  try {
-    const saved = localStorage.getItem('wiki-history');
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
-});
-
-useEffect(() => {
-  try {
-    localStorage.setItem('wiki-history', JSON.stringify(wikiHistory));
-  } catch (error) {
-    console.error('Failed to save history:', error);
-  }
-}, [wikiHistory]);
-```
-
-**注意事项**：
-- LocalStorage 限制约 5-10MB
-- 需要处理存储配额超限的情况
-- 考虑只保存摘要信息以减少存储空间
+**待优化**：生成历史（`wikiHistory`）仍为内存存储，建议添加 localStorage 持久化以支持跨会话恢复。
 
 ---
 
@@ -1753,6 +1777,199 @@ openTab(pagePath, parsedBlocks);
 
 ---
 
+## Wiki 浏览器
+
+### 概述
+
+v2.5 新增 Wiki 浏览器视图（`WIKI_BROWSER`），作为 Wiki 的入口级浏览界面。用户可以一键扫描后端已生成的 Wiki 目录，并直接跳转到分析视图查看内容。
+
+### 组件设计
+
+```typescript
+// components/WikiBrowser.tsx
+interface WikiBrowserProps {
+  isDarkMode?: boolean;
+  onOpenWikiPage: (pagePath: string, allPages: string[]) => void;
+}
+```
+
+### 工作流程
+
+```
+用户点击"生成 Wiki"
+      ↓
+调用 codenexusWikiService.scanWikis()
+      ↓
+获取 wiki_pages 列表
+      ↓
+调用 onOpenWikiPage(firstPage, allPages)
+      ↓
+自动跳转到 AnalysisView 展示内容
+```
+
+### 功能特性
+
+1. **一键扫描**：调用 `/api/scan_wikis` 扫描后端所有已生成的 Wiki
+2. **自动跳转**：扫描完成后直接加载第一个页面并跳转到分析视图
+3. **状态反馈**：显示扫描进度、页面数量、错误信息
+4. **明暗主题**：支持 `isDarkMode` 适配，Apple 风格设计
+
+### 在 Sidebar 中的位置
+
+WikiBrowser 在侧边栏中作为独立导航项，点击后切换到 `AnalysisType.WIKI_BROWSER` 视图。
+
+---
+
+## Mermaid 图表编辑器
+
+### 概述
+
+v2.5 新增基于 Monaco Editor 的 Mermaid 图表编辑器，支持代码编辑和实时预览的分屏布局，可通过双击 Mermaid 图表或右键菜单打开。
+
+### 组件架构
+
+```
+MermaidEditModal (模态框入口)
+├── ToolBar (工具栏：视图切换、方向设置、保存/重置)
+├── EditorPanel (左侧：Monaco 代码编辑器)
+└── PreviewPanel (右侧：实时 Mermaid 预览)
+```
+
+### 核心组件
+
+#### MermaidEditModal
+
+全屏模态框，支持拖拽移动和边缘 resize：
+
+```typescript
+// components/mermaid/MermaidEditModal.tsx
+interface MermaidEditModalProps {
+  isOpen: boolean;
+  initialChart: string;
+  metadata?: MermaidMetadata;
+  onClose: () => void;
+  onSave?: (newChart: string) => void;
+  onApply?: (newChart: string) => void;
+  onNodeClick?: (nodeId: string) => void;
+}
+```
+
+#### MermaidEditor
+
+独立的编辑器组件，可嵌入任意位置：
+
+```typescript
+// components/mermaid-editor/MermaidEditor.tsx
+interface MermaidEditorProps {
+  initialCode?: string;
+  onChange?: (code: string) => void;
+  enableDrag?: boolean;
+  height?: string | number;
+  showToolbar?: boolean;
+  isDarkMode?: boolean;
+}
+```
+
+#### 视图模式
+
+| 模式 | 说明 |
+|------|------|
+| `split` | 左右分屏：编辑器 + 预览（默认） |
+| `editor` | 仅显示代码编辑器 |
+| `preview` | 仅显示预览 |
+
+### useMermaidEditor Hook
+
+管理编辑器状态和代码处理：
+
+```typescript
+// hooks/useMermaidEditor.ts
+interface MermaidEditorState {
+  code: string;                    // 当前代码
+  config: MermaidEditorConfig;     // 编辑器配置
+  setCode: (code: string) => void;
+  setDirection: (direction: FlowDirection) => void;  // LR | RL | TB | BT
+  setNodeSpacing: (spacing: number) => void;
+  setRankSpacing: (spacing: number) => void;
+  processedCode: string;           // 处理后的代码（包含 init 配置）
+}
+```
+
+**自动解析**：Hook 从 Mermaid 代码中自动提取方向和 `%%{init:...}%%` 配置，保持代码和配置面板同步。
+
+### useSvgDrag Hook
+
+基于 D3.js 的 SVG 节点拖拽交互：
+
+```typescript
+// hooks/useSvgDrag.ts
+interface UseSvgDragOptions {
+  enabled?: boolean;
+  nodeSelector?: string;
+  onDragStart?: (nodeId: string, position: DragPosition) => void;
+  onDrag?: (nodeId: string, position: DragPosition) => void;
+  onDragEnd?: (nodeId: string, position: DragPosition) => void;
+}
+```
+
+**用途**：在预览面板中拖拽 Mermaid 节点以调整位置（通过修改 SVG `transform` 属性）。
+
+---
+
+## 页面缓存服务
+
+### 概述
+
+v2.5 新增 `wikiPageCache` 单例服务，提供基于内存的 LRU 缓存，避免重复请求已加载的 Wiki 页面。
+
+### 缓存策略
+
+| 特性 | 说明 |
+|------|------|
+| 存储方式 | 内存（Map），页面刷新后自动清空 |
+| 最大容量 | 1000 个页面 |
+| 淘汰策略 | LRU（Least Recently Used），自动淘汰最久未访问的页面 |
+| 会话管理 | sessionStorage 记录会话 ID，新会话时清理可能遗留的旧 localStorage 数据 |
+
+### API
+
+```typescript
+// services/wikiPageCache.ts
+class WikiPageCacheService {
+  get(pagePath: string): WikiPage | null;      // 获取缓存（更新访问时间）
+  set(pagePath: string, data: WikiPage): void; // 写入缓存（触发 LRU 淘汰）
+  remove(pagePath: string): void;              // 移除指定页面缓存
+  clear(): void;                               // 清空所有缓存
+}
+
+// 单例导出
+export const wikiPageCache: WikiPageCacheService;
+```
+
+### 与 fetchPage 集成
+
+`codenexusWikiService.fetchPage()` 内部自动使用缓存：
+
+```typescript
+// services/codenexusWikiService.ts
+async fetchPage(pagePath: string): Promise<WikiPage> {
+  // 先查缓存
+  const cached = wikiPageCache.get(pagePath);
+  if (cached) return cached;
+
+  // 缓存未命中，请求后端
+  const data = await fetch(`/api/fetch_page`, { ... });
+  wikiPageCache.set(pagePath, data);
+  return data;
+}
+```
+
+### 缓存失效
+
+调用 `/api/apply_changes` 应用变更后，`useDiffMode` 会自动调用 `wikiPageCache.remove(pagePath)` 使对应页面缓存失效，确保下次加载获取最新数据。
+
+---
+
 ## 故障排查
 
 ### 问题 1: CodeNexus 无响应
@@ -2162,7 +2379,7 @@ const MyComponent = () => {
 
 ### 主题持久化
 
-主题选择会自动保存到 `localStorage`，键名为 `wiki-theme`。页面刷新后会自动恢复上次选择的主题。
+主题选择会自动保存到 `localStorage`，键名为 `wiki-theme-id`（主题 ID）和 `wiki-dark-mode`（暗色模式开关）。页面刷新后会自动恢复上次选择的主题和明暗模式。
 
 ### Neo4j Source 卡片
 
@@ -2271,6 +2488,7 @@ Neo4j 连接配置在 `MarkdownToJsonParser` 类中：
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v2.5 | 2026-03-27 | **Wiki 浏览器 & Mermaid 编辑器 & 页面缓存**：新增 WikiBrowser 视图（`WIKI_BROWSER` 分析类型，`/api/scan_wikis` + `/api/list_wikis` API）；新增 Mermaid 图表编辑器（`mermaid-editor/` 组件集、`MermaidEditModal` 模态框、基于 Monaco Editor 的代码编辑 + 实时预览分屏）；新增 `useMermaidEditor` 和 `useSvgDrag` Hooks；新增 `wikiPageCache` 内存 LRU 缓存服务（最大 1000 页）；新增 `MarkdownRenderer` 独立 Markdown 渲染组件；新增 `@monaco-editor/react` 和 `d3` 依赖；修正主题 localStorage 键名为 `wiki-theme-id` + `wiki-dark-mode` |
 | v2.4 | 2026-02-08 | **Neo4j Source 显示**：后端 `markdown_parser.py` 新增 Neo4j 数据库查询功能，将 `neo4j_id` 转换为 `neo4j_source`（节点名称）；前端 `WikiBlock.tsx` 和 `Mermaid.tsx` 显示节点名称而非 ID；`types.ts` 和 `wikiContentParser.ts` 添加 `neo4jSource` 字段支持 |
 | v2.3 | 2026-02-07 | **Wiki 页面多标签页**：新增 VSCode 风格页面标签栏（PageTabBar 组件）、usePageTabs Hook 管理标签状态、支持多页面快速切换、每个标签保持独立状态（blocks、scrollPosition、selectedBlockIds）、标签关闭自动切换相邻标签、与 WikiPageNavigator/工作流/历史记录集成 |
 | v2.2 | 2026-01-28 | **主题系统与 Mermaid 增强**：新增 Wiki 主题系统（Apple/GitHub/Notion/Technical 四套主题）、useWikiTheme Hook、config/wikiThemes.ts 配置文件、Neo4j ID 卡片样式随主题变化、Mermaid subgraph 高亮支持、右键菜单显示 Neo4j ID、移除 useSourcePanel 的 fallbackLocationGenerator |

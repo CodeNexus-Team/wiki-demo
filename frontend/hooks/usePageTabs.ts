@@ -21,6 +21,11 @@ interface UsePageTabsReturn {
   saveCurrentTabState: (blocks: WikiBlock[], selectedBlockIds: Set<string>) => void;
 
   clearTabs: () => void;
+
+  /** Force-activate a tab by ID. No stale-closure checks — safe from async callbacks. */
+  forceActivateTab: (tabId: string) => void;
+  /** Save state for a specific tab by ID. No dependency on activeTabId — safe from async callbacks. */
+  saveTabStateById: (tabId: string, blocks: WikiBlock[], selectedBlockIds: Set<string>) => void;
 }
 
 function extractTitle(pagePath: string): string {
@@ -127,6 +132,19 @@ export function usePageTabs(options: UsePageTabsOptions = {}): UsePageTabsReturn
     tabStatesRef.current.clear();
   }, []);
 
+  // Force-activate a tab by ID without any stale-closure checks.
+  // Safe to call from async callbacks where other values may be stale.
+  const forceActivateTab = useCallback((tabId: string) => {
+    setActiveTabId(tabId);
+  }, []);
+
+  // Save arbitrary tab state by ID (no dependency on activeTabId).
+  // Safe to call from async callbacks.
+  const saveTabStateById = useCallback((tabId: string, blocks: WikiBlock[], selectedBlockIds: Set<string>) => {
+    const scrollPosition = getScrollPosition?.() ?? 0;
+    tabStatesRef.current.set(tabId, { blocks, scrollPosition, selectedBlockIds });
+  }, [getScrollPosition]);
+
   return {
     tabs,
     activeTabId,
@@ -137,5 +155,7 @@ export function usePageTabs(options: UsePageTabsOptions = {}): UsePageTabsReturn
     getTabState,
     saveCurrentTabState,
     clearTabs,
+    forceActivateTab,
+    saveTabStateById,
   };
 }

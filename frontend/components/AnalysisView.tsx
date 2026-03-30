@@ -119,6 +119,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   const wikiPagesHook = useWikiPages({
     mainContentRef,
     onPageLoaded: (newBlocks) => {
+      // Don't overwrite blocks if diff mode is active (e.g. detailedQuery
+      // response arrived while a page load was still in flight)
+      if (isDiffModeRef.current) return;
       setBlocks(newBlocks);
       setSelectedBlockIds(new Set());
     }
@@ -133,7 +136,15 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setIsNavigatorVisible,
     handlePageSwitch: handlePageSwitchBase,
     loadPage,
+    cancelPendingLoad,
   } = wikiPagesHook;
+
+  // Always-fresh refs for values needed after async awaits (closures go stale)
+  const currentPagePathRef = useRef(currentPagePath);
+  currentPagePathRef.current = currentPagePath;
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
+  const isDiffModeRef = useRef(false);
 
   // Page Tabs
   const pageTabs = usePageTabs({
@@ -154,6 +165,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     getTabState,
     saveCurrentTabState,
     clearTabs,
+    forceActivateTab,
+    saveTabStateById,
   } = pageTabs;
 
   const diffMode = useDiffMode({
@@ -171,6 +184,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     applyModifyPageResponse,
     setIsDiffMode
   } = diffMode;
+  isDiffModeRef.current = isDiffMode;
 
   const sourcePanel = useSourcePanel();
   const {
@@ -548,11 +562,21 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           updateAssistantProgress(assistantMsgId, `检测到 ${currentSelectedIds.size} 个选中的块，正在执行块级细化...`);
 
           const blockIds = Array.from(currentSelectedIds);
+          // Snapshot the page and blocks at request time
+          const queryPagePath = currentPagePath;
+          const queryBlocks = [...blocks];
+
           const response = await codenexusWikiService.detailedQuery(
-            currentPagePath,
+            queryPagePath,
             blockIds,
-            currentPrompt
+            currentPrompt,
+            (msg) => updateAssistantProgress(assistantMsgId, msg)
           );
+
+          // --- After await: all closure-captured values may be stale ---
+          // Use refs (currentPagePathRef, blocksRef) for current state.
+          // Use closure-free methods (forceActivateTab, saveTabStateById, setBlocks,
+          // setCurrentPagePath) which are state setters / have no stale deps.
 
           if ('new_page_path' in response) {
             updateAssistantProgress(assistantMsgId, 'AI 建议创建新页面...');
@@ -569,13 +593,38 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           } else {
             updateAssistantProgress(assistantMsgId, 'AI 正在分析并生成修改建议...');
 
-            const modifiedBlocks = await applyModifyPageResponse(response, blocks);
-            enterDiffMode(modifiedBlocks, response);
+            // IMMEDIATELY cancel any in-flight page loads and mark diff mode
+            // BEFORE yielding execution via await. This prevents page load
+            // completions from overwriting blocks during the yield.
+            cancelPendingLoad();
+            isDiffModeRef.current = true;
 
+            // If user switched away, save their current page state
+            const livePagePath = currentPagePathRef.current;
+            if (livePagePath !== queryPagePath) {
+              saveTabStateById(livePagePath, blocksRef.current, new Set());
+              setCurrentPagePath(queryPagePath);
+              forceActivateTab(queryPagePath);
+            }
+
+            // Use the snapshotted blocks from request time, not current (possibly stale) blocks
+            const modifiedBlocks = await applyModifyPageResponse(response, queryBlocks);
+
+            // Enter diff mode with correct original blocks snapshot
+            enterDiffMode(modifiedBlocks, response, queryBlocks);
+
+            const replaceCount = response.replace_blocks?.length ?? 0;
             const insertCount = response.insert_blocks.length;
             const deleteCount = response.delete_blocks.length;
 
-            finalContent = `已生成修改建议：\n- 新增 ${insertCount} 个块\n- 删除 ${deleteCount} 个块\n\n请查看差异预览，确认后点击"应用变更"。`;
+            const parts: string[] = [];
+            if (replaceCount > 0) parts.push(`替换 ${replaceCount} 个块`);
+            if (insertCount > 0) parts.push(`新增 ${insertCount} 个块`);
+            if (deleteCount > 0) parts.push(`删除 ${deleteCount} 个块`);
+
+            finalContent = parts.length > 0
+              ? `已生成修改建议：\n- ${parts.join('\n- ')}\n\n请查看差异预览，确认后点击"应用变更"。`
+              : `未检测到需要修改的内容。`;
           }
 
           finalizeAssistantMessage(assistantMsgId, finalContent);
@@ -668,7 +717,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, selectedModel, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode, openTab, clearTabs]);
+  }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, selectedModel, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode, openTab, clearTabs, forceActivateTab, saveTabStateById, cancelPendingLoad]);
 
   return (
     <div className={`h-full relative flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0d1117]' : 'bg-[#F5F5F7]'}`}>
