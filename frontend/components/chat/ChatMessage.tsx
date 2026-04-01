@@ -1,4 +1,8 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { ghcolors } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ChatMessage as ChatMessageType, WikiBlock } from '../../types';
 import { Bot, Quote } from 'lucide-react';
 import { ThinkingChain } from './ThinkingChain';
@@ -56,13 +60,56 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         {/* Message Content */}
         {message.content && (
           <div className={`
-            px-5 py-3.5 rounded-[1.2rem] text-sm leading-relaxed shadow-sm whitespace-pre-wrap
+            px-5 py-3.5 rounded-[1.2rem] text-sm leading-relaxed shadow-sm
             ${isUser
-              ? `${userBgClass} text-white rounded-br-sm`
+              ? `${userBgClass} text-white rounded-br-sm whitespace-pre-wrap`
               : 'bg-white border border-[#e5e5ea] text-[#1d1d1f] rounded-tl-sm'
             }
           `}>
-            {message.content}
+            {isUser ? message.content : (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  p: ({node, ...props}) => <p {...props} className="mb-2 last:mb-0" />,
+                  a: ({node, ...props}) => <a {...props} className="text-[#0071E3] underline" />,
+                  strong: ({node, ...props}) => <strong {...props} className="font-semibold" />,
+                  ul: ({node, ...props}) => <ul {...props} className="list-disc pl-5 mb-2" />,
+                  ol: ({node, ...props}) => <ol {...props} className="list-decimal pl-5 mb-2" />,
+                  li: ({node, ...props}) => <li {...props} className="mb-0.5" />,
+                  h1: ({node, ...props}) => <h1 {...props} className="text-base font-bold mb-2 mt-3 first:mt-0" />,
+                  h2: ({node, ...props}) => <h2 {...props} className="text-sm font-bold mb-1.5 mt-2.5 first:mt-0" />,
+                  h3: ({node, ...props}) => <h3 {...props} className="text-sm font-semibold mb-1 mt-2 first:mt-0" />,
+                  code: ({node, className, children, ...props}) => {
+                    const match = /language-(\w+)/.exec(className || '');
+                    const inline = !match;
+                    return inline ? (
+                      <code {...props} className="bg-gray-100 text-[#d63384] px-1 py-0.5 rounded text-[13px] font-mono">{children}</code>
+                    ) : (
+                      <SyntaxHighlighter
+                        language={match![1]}
+                        style={ghcolors}
+                        customStyle={{ margin: '0.5rem 0', padding: '0.75rem', borderRadius: '0.5rem', fontSize: '13px' }}
+                        wrapLongLines
+                      >
+                        {String(children).replace(/\n$/, '')}
+                      </SyntaxHighlighter>
+                    );
+                  },
+                  table: ({node, ...props}) => (
+                    <div className="overflow-x-auto my-2">
+                      <table {...props} className="w-full border-collapse text-xs" />
+                    </div>
+                  ),
+                  thead: ({node, ...props}) => <thead {...props} className="bg-gray-50" />,
+                  th: ({node, ...props}) => <th {...props} className="border border-gray-200 px-2 py-1 text-left font-semibold" />,
+                  td: ({node, ...props}) => <td {...props} className="border border-gray-200 px-2 py-1" />,
+                  blockquote: ({node, ...props}) => <blockquote {...props} className="border-l-3 border-gray-300 pl-3 my-2 text-gray-600 italic" />,
+                  hr: () => <hr className="my-3 border-gray-200" />,
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+            )}
 
             {/* Clarification Options */}
             {!isUser && message.clarificationOptions && message.clarificationOptions.length > 0 && onClarificationSelect && (

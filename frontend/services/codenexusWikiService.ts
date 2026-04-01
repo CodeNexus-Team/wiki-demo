@@ -7,6 +7,7 @@ import {
   DetailedQueryRequest,
   ModifyPageResponse,
   NewPageResponse,
+  QaAnswerResponse,
   ExpandedQuestion,
   WikiPage,
   WikiTreeNode
@@ -201,12 +202,14 @@ class CodeNexusWikiService {
     blockIds: string[],
     userQuery: string,
     onProgress?: (message: string) => void,
-    onClarify?: (question: string, options: string[]) => Promise<string>
-  ): Promise<ModifyPageResponse | NewPageResponse> {
+    onClarify?: (question: string, options: string[]) => Promise<string>,
+    resumeSessionId?: string
+  ): Promise<(ModifyPageResponse | NewPageResponse | QaAnswerResponse) & { session_id?: string }> {
     const request: DetailedQueryRequest = {
       page_path: pagePath,
       block_ids: blockIds,
-      user_query: userQuery
+      user_query: userQuery,
+      resume_session_id: resumeSessionId,
     };
 
     console.log('[CodeNexus Service] 调用 detailedQuery API (SSE):', {
@@ -235,7 +238,7 @@ class CodeNexusWikiService {
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let finalResult: ModifyPageResponse | NewPageResponse | null = null;
+      let finalResult: (ModifyPageResponse | NewPageResponse | QaAnswerResponse) & { session_id?: string } | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -276,7 +279,9 @@ class CodeNexusWikiService {
             } else if (event.type === 'result') {
               const data = event.data;
               console.log('[CodeNexus Service] detailedQuery 结果:', data);
-              if ('new_page_path' in data) {
+              if ('qa_answer' in data) {
+                finalResult = data as QaAnswerResponse;
+              } else if ('new_page_path' in data) {
                 finalResult = data as NewPageResponse;
               } else {
                 finalResult = data as ModifyPageResponse;

@@ -88,6 +88,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   const contentEndRef = useRef<HTMLDivElement>(null);
   const mainContentRef = useRef<HTMLDivElement>(null);
   const justLoadedHistoryRef = useRef(false);
+  // Agent 会话 ID：用于追问时 --resume 恢复上下文
+  const agentSessionIdRef = useRef<string | null>(null);
 
   // Custom Hooks
   const blockSelection = useBlockSelection({ blocks, isDiffMode: false });
@@ -343,6 +345,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     closeSourcePanel();
     setSelectedBlockIds(new Set());
     setIsDiffMode(false);
+    agentSessionIdRef.current = null;
   }, [type, selectedHistoryRecord, initialWikiData, clearHistory, setIsChatExpanded, closeSourcePanel, setSelectedBlockIds, setIsDiffMode]);
 
   // Scroll to content end when blocks change (skip for direct wiki loading)
@@ -601,7 +604,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           // Use closure-free methods (forceActivateTab, saveTabStateById, setBlocks,
           // setCurrentPagePath) which are state setters / have no stale deps.
 
-          if ('new_page_path' in response) {
+          // 保存 session_id 供后续追问
+          agentSessionIdRef.current = response.session_id ?? null;
+
+          if ('qa_answer' in response) {
+            // 模型判定为提问 → 直接展示回答
+            finalContent = response.qa_answer;
+          } else if ('new_page_path' in response) {
             updateAssistantProgress(assistantMsgId, 'AI 建议创建新页面...');
             const parsedBlocks = parseWikiPageToBlocks(response.new_page.content, response.new_page.source);
 
@@ -655,15 +664,82 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           return;
         }
 
-        // 有页面时 → 自由问答；无页面时 → 生成 Wiki 工作流
+        // 有页面时 → 追问/自由问答；无页面时 → 生成 Wiki 工作流
         if (currentPagePath) {
-          updateAssistantProgress(assistantMsgId, '正在分析您的问题...');
-          const answer = await codenexusWikiService.qaQuery(
-            currentPagePath,
-            currentPrompt,
-            (msg) => updateAssistantProgress(assistantMsgId, msg)
-          );
-          finalizeAssistantMessage(assistantMsgId, answer);
+          const hasSession = !!agentSessionIdRef.current;
+          updateAssistantProgress(assistantMsgId, hasSession ? '正在追问...' : '正在分析您的问题...');
+
+          if (hasSession) {
+            // 有上次会话 → 通过 detailedQuery + resume 保持上下文
+            const queryPagePath = currentPagePath;
+            const queryBlocks = [...blocks];
+
+            const response = await codenexusWikiService.detailedQuery(
+              queryPagePath,
+              [],
+              currentPrompt,
+              (msg) => updateAssistantProgress(assistantMsgId, msg),
+              async (question, options) => {
+                // 追问中触发澄清：复用同一聊天气泡展示选项
+                setChatHistory(prev => prev.map(msg =>
+                  msg.id === assistantMsgId
+                    ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options }
+                    : msg
+                ));
+                return new Promise<string>((resolve) => {
+                  setClarificationResolver(resolve);
+                });
+              },
+              agentSessionIdRef.current!
+            );
+            agentSessionIdRef.current = response.session_id ?? null;
+
+            if ('qa_answer' in response) {
+              finalContent = response.qa_answer;
+            } else if ('new_page_path' in response) {
+              const parsedBlocks = parseWikiPageToBlocks(response.new_page.content, response.new_page.source);
+              setWikiPages(prev => [...prev, response.new_page_path]);
+              setCurrentPagePath(response.new_page_path);
+              setBlocks(parsedBlocks);
+              openTab(response.new_page_path, parsedBlocks);
+              finalContent = `已创建新页面：${response.new_page_path}\n\n包含 ${parsedBlocks.length} 个对象。`;
+            } else {
+              // 模型在追问中输出了修改指令 → 进入 diff 模式
+              cancelPendingLoad();
+              isDiffModeRef.current = true;
+              const livePagePath = currentPagePathRef.current;
+              if (livePagePath !== queryPagePath) {
+                saveTabStateById(livePagePath, blocksRef.current, new Set());
+                setCurrentPagePath(queryPagePath);
+                forceActivateTab(queryPagePath);
+              }
+              const modifiedBlocks = await applyModifyPageResponse(response, queryBlocks);
+              enterDiffMode(modifiedBlocks, response, queryBlocks);
+              agentSessionIdRef.current = null; // 进入 diff 后清除 session
+
+              const replaceCount = response.replace_blocks?.length ?? 0;
+              const insertCount = response.insert_blocks.length;
+              const deleteCount = response.delete_blocks.length;
+              const parts: string[] = [];
+              if (replaceCount > 0) parts.push(`替换 ${replaceCount} 个块`);
+              if (insertCount > 0) parts.push(`新增 ${insertCount} 个块`);
+              if (deleteCount > 0) parts.push(`删除 ${deleteCount} 个块`);
+              finalContent = parts.length > 0
+                ? `已生成修改建议：\n- ${parts.join('\n- ')}\n\n请查看差异预览，确认后点击"应用变更"。`
+                : `未检测到需要修改的内容。`;
+            }
+            finalizeAssistantMessage(assistantMsgId, finalContent);
+            setIsLoading(false);
+            return;
+          } else {
+            // 无上次会话 → 走原有 qaQuery
+            const answer = await codenexusWikiService.qaQuery(
+              currentPagePath,
+              currentPrompt,
+              (msg) => updateAssistantProgress(assistantMsgId, msg)
+            );
+            finalizeAssistantMessage(assistantMsgId, answer);
+          }
         } else {
           updateAssistantProgress(assistantMsgId, '正在使用 CodeNexus AI 分析您的问题...');
           const questions = await codenexusWikiService.expandQuery(currentPrompt);
@@ -840,8 +916,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         {/* Diff Confirmation Bar (Floating) */}
         {isDiffMode && (
           <DiffConfirmBar
-            onApply={applyDiffChanges}
-            onDiscard={discardDiffChanges}
+            onApply={() => { applyDiffChanges(); agentSessionIdRef.current = null; }}
+            onDiscard={() => { discardDiffChanges(); agentSessionIdRef.current = null; }}
             variant="floating"
           />
         )}

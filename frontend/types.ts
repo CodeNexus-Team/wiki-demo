@@ -164,6 +164,7 @@ export interface DetailedQueryRequest {
   page_path: string;
   block_ids: string[];
   user_query: string;
+  resume_session_id?: string;
 }
 
 // 修改当前页面的响应
@@ -186,6 +187,11 @@ export interface ModifyPageResponse {
 export interface NewPageResponse {
   new_page_path: string;
   new_page: WikiPage;
+}
+
+// 模型判定为提问时的回答响应
+export interface QaAnswerResponse {
+  qa_answer: string;
 }
 
 // Wiki 生成历史记录

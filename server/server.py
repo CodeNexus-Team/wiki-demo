@@ -96,8 +96,9 @@ class FetchPageResponse(BaseModel):
 class DetailedQueryRequest(BaseModel):
     """详细查询请求模型"""
     page_path: str = Field(..., description="当前页面路径")
-    block_ids: List[str] = Field(..., description="用户选中的 block ID 列表")
+    block_ids: List[str] = Field(default_factory=list, description="用户选中的 block ID 列表")
     user_query: str = Field(..., description="用户的查询指令")
+    resume_session_id: Optional[str] = Field(None, description="恢复之前会话的 session_id（追问时使用）")
 
 
 class QaQueryRequest(BaseModel):
@@ -548,7 +549,8 @@ async def detailed_query(
             return answer
 
         try:
-            print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, user_query={request.user_query}")
+            print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, "
+                  f"user_query={request.user_query}, resume_session_id={request.resume_session_id}")
             wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
 
             # Start the agent in a background task
@@ -559,6 +561,7 @@ async def detailed_query(
                 wiki_root=wiki_root,
                 on_progress=on_progress,
                 on_clarify=on_clarify,
+                resume_session_id=request.resume_session_id,
             ))
 
             # Drain events while the agent is running

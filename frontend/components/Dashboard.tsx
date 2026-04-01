@@ -66,7 +66,7 @@ const Dashboard: React.FC<DashboardProps> = ({ isDarkMode = false }) => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard title="模块总数" value="6" icon={<Layers size={22} />} color="text-blue-500 bg-blue-500" isDarkMode={isDarkMode} />
+        <StatCard title="模块总数" value="115" icon={<Layers size={22} />} color="text-blue-500 bg-blue-500" isDarkMode={isDarkMode} />
         <StatCard title="代码行数 (LOC)" value="15.2k" icon={<FileCode size={22} />} color="text-emerald-500 bg-emerald-500" isDarkMode={isDarkMode} />
         <StatCard title="提交次数" value="843" icon={<GitCommit size={22} />} color="text-violet-500 bg-violet-500" isDarkMode={isDarkMode} />
         <StatCard title="潜在问题" value="34" icon={<AlertCircle size={22} />} color="text-amber-500 bg-amber-500" isDarkMode={isDarkMode} />
