@@ -4,11 +4,15 @@
 
 ## 功能特性
 
-- 自动将 `.meta.json` / `.md` 格式的 Wiki 数据转换为前端可渲染的 JSON 格式
-- 交互式 Wiki 浏览：层级折叠、源码关联、Mermaid 图表、多页 Tab 切换
-- AI 驱动的内容编辑：选中 block 后由 Claude 智能体读取源码并修改内容
-- Diff 预览与变更审核：修改前后红绿对比，确认后写入文件
-- Neo4j 知识图谱集成：代码实体关系查询
+- **浏览 Wiki**：层级折叠展开、多页 Tab 切换、Mermaid 图表渲染、点击查看关联源码
+- **搜索内容**：Ctrl/Cmd+F 全文搜索，关键词高亮，搜索结果可跨页面跳转
+- **选中提问**：选中感兴趣的内容块，直接提问，AI 会阅读源码后给出准确回答
+- **多轮追问**：回答后可继续追问，AI 记得之前读过的源码和上下文，无需重复说明
+- **选中修改**：选中需要改进的内容块，描述修改需求，AI 阅读源码后生成修改建议
+- **智能判断意图**：选中 block 后无需区分"提问"还是"修改"，AI 自动识别你的意图
+- **模糊指令澄清**：输入"优化一下"等模糊指令时，AI 会列出可选方向让你一键选择
+- **Diff 预览确认**：修改前后红绿对比，确认无误后再写入，避免误操作
+- **数据格式转换**：自动将 `.meta.json` / `.md` 格式的 Wiki 数据转换为可浏览的页面
 
 ## 架构概览
 
@@ -17,8 +21,9 @@
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
 │  WikiBrowser    │     │  /api/fetch_page │     │  claude -p prompt   │
 │  AnalysisView   │────▶│  /api/detailed   │────▶│  Read / Grep / Bash │
-│  WikiContent    │     │  /api/apply      │     │  输出修改指令        │
-│  DiffMode       │◀────│  /api/scan_wikis │◀────│                     │
+│  WikiContent    │     │  /api/qa_query   │     │  意图判断:           │
+│  ChatMessage    │◀────│  /api/search_wiki│◀────│   提问→回答/修改→指令 │
+│  DiffMode       │     │  /api/apply      │     │  --resume 追问      │
 └─────────────────┘     └──────────────────┘     └─────────────────────┘
      :3000                   :11219
 ```
@@ -206,31 +211,42 @@ frontend/public/source-code/
 
 > `.meta.json` 中 `source_id_list[].name` 的文件路径应与 `frontend/public/source-code/<项目名>/` 下的相对路径一致。例如 `name` 为 `mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`，则对应文件为 `frontend/public/source-code/mall/mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`。
 
-## 交互式编辑（智能体）
+## 交互式智能体
 
-在前端选中一个或多个 block 后输入修改指令，后端会：
+在前端选中一个或多个 block 后输入指令，智能体会自动判断你的意图：
 
-1. 提取选中 block 的内容、页面结构概览、关联源码路径（含祖先链 neo4j 信息）
-2. 调用 Claude Code CLI（流式读取 stream-json 事件，实时推送进度）
-3. 如用户指令模糊，触发**澄清机制**：前端展示可点选的选项按钮，用户选择后在同一会话中继续
-4. 模型通过 Read/Grep 读取源码，输出修改指令（replace / insert_after / delete）
-5. 前端展示 Diff 预览（红色原内容 / 绿色新内容）
-6. 用户确认后写入 JSON 文件
+### 意图识别
+
+- **提问**（如"这个类的作用是什么？"）→ 阅读源码后直接回答，支持继续追问
+- **修改**（如"把这段改详细点"）→ 阅读源码后生成修改指令，展示 Diff 预览
+- **模糊**（如"优化一下"）→ 触发澄清机制，列出可选方向让你选择
+
+### 多轮追问
+
+回答后可以不选中 block 直接继续追问，智能体通过 `--resume` 恢复之前的会话上下文，记得之前读过的源码和给出的回答。也可以在追问中切换为修改请求，智能体会正确进入 Diff 模式。
 
 ### 澄清机制
 
 当用户输入模糊指令（如"优化"、"调整"）时，Agent 会先提出澄清问题并给出可选方向：
 
-- 前端在输入框上方渲染选项按钮，用户一键选择
+- 前端在聊天气泡中渲染选项按钮，用户一键选择
 - 最后一项固定为「其他」，支持自由输入
 - 选择后通过 `--resume` 在同一会话中继续，保留已读源码上下文
+
+### 修改流程
+
+1. 提取选中 block 的内容、页面结构概览、关联源码路径（含祖先链 neo4j 信息）
+2. 调用 Claude Code CLI（流式读取 stream-json 事件，实时推送进度）
+3. 模型通过 Read/Grep 读取源码，输出修改指令（replace / insert_after / delete）
+4. 前端展示 Diff 预览（红色原内容 / 绿色新内容）
+5. 用户确认后写入 JSON 文件
 
 ### 智能体日志
 
 调用日志保存在 `server/logs/agent.log`，记录：
-- 每次请求的参数和耗时
+- 每次请求的参数、意图判断结果和耗时
 - Claude 调用的工具（Read、Grep、Bash 等）及返回结果
-- 模型输出的修改指令内容
+- 模型输出的回答或修改指令内容
 
 ## 环境变量
 
@@ -250,11 +266,13 @@ frontend/public/source-code/
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/list_wikis` | GET | 获取 Wiki 文件树状列表 |
+| `/api/search_wiki?q=xxx` | GET | 全文搜索 Wiki 内容，返回匹配的 block 及预览 |
 | `/api/scan_wikis` | GET | 扫描目录返回所有页面路径 |
 | `/api/fetch_page?page_path=xxx` | POST | 获取单个 Wiki 页面内容 |
 | `/api/user_query` | POST | 扩展查询 / 执行工作流 |
-| `/api/detailed_query` | POST | 智能体交互式修改（SSE 流式响应，支持 progress/clarification/result/error 事件） |
+| `/api/detailed_query` | POST | 智能体交互（SSE 流式响应），自动识别提问/修改意图，支持 `resume_session_id` 追问 |
 | `/api/clarification_answer` | POST | 用户回答澄清问题（配合 detailed_query 的 clarification 事件） |
+| `/api/qa_query` | POST | Wiki & 源码自由问答（SSE 流式响应，无 block 选中时使用） |
 | `/api/apply_changes` | POST | 确认并应用变更到 JSON 文件 |
 
 ## 目录结构
