@@ -1,5 +1,5 @@
 import { useState, useCallback, createContext, useContext } from 'react';
-import { WikiTheme, themePairs, getThemeByPairAndMode, appleTheme } from '../config/wikiThemes';
+import { WikiTheme, themePairs, getThemeByPairAndMode, notionTheme } from '../config/wikiThemes';
 
 interface WikiThemeContextType {
   theme: WikiTheme;
@@ -20,8 +20,8 @@ export const useWikiTheme = (): WikiThemeContextType => {
   if (!context) {
     // 如果没有 Provider，返回默认主题
     return {
-      theme: appleTheme,
-      themeId: 'apple',
+      theme: notionTheme,
+      themeId: 'notion',
       isDarkMode: false,
       setThemeId: () => {},
       toggleDarkMode: () => {},
@@ -33,7 +33,7 @@ export const useWikiTheme = (): WikiThemeContextType => {
 };
 
 // Hook 用于创建主题状态（在顶层组件使用）
-export const useWikiThemeState = (initialThemeId: string = 'apple', initialDarkMode: boolean = false) => {
+export const useWikiThemeState = (initialThemeId: string = 'notion', initialDarkMode: boolean = false) => {
   const [themeId, setThemeIdState] = useState<string>(() => {
     // 尝试从 localStorage 读取
     if (typeof window !== 'undefined') {

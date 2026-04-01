@@ -3,7 +3,8 @@ import { WikiBlock, MermaidMetadata, WikiSource } from '../../types';
 import { countTreeNodes } from '../../utils/treeBuilder';
 import WikiBlockRenderer from '../WikiBlock';
 import WikiPageNavigator from '../WikiPageNavigator';
-import { Loader2, Sparkles, Zap, FileDiff, PanelLeft, Palette, ChevronDown, GripVertical, Sun, Moon } from 'lucide-react';
+import { codenexusWikiService } from '../../services/codenexusWikiService';
+import { Loader2, Sparkles, Zap, FileDiff, PanelLeft, Palette, ChevronDown, GripVertical, Sun, Moon, Search, X, ArrowUp, ArrowDown } from 'lucide-react';
 import { useWikiTheme } from '../../hooks/useWikiTheme';
 
 interface WikiContentProps {
@@ -70,6 +71,141 @@ const WikiContentInner: React.FC<WikiContentProps> = ({
   const hasMultiplePages = wikiPages.length > 1;
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
   const { theme, themeId, setThemeId, isDarkMode, toggleDarkMode, availableThemes } = useWikiTheme();
+
+  // Search
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Array<{ page_path: string; block_id: string; preview: string }>>([]);
+  const [currentResultIndex, setCurrentResultIndex] = useState(0);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced search via backend API
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setCurrentResultIndex(0);
+      return;
+    }
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(async () => {
+      setIsSearching(true);
+      const results = await codenexusWikiService.searchWiki(searchQuery.trim());
+      setSearchResults(results);
+      setCurrentResultIndex(0);
+      setIsSearching(false);
+    }, 300);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [searchQuery]);
+
+  const goToResult = useCallback((index: number) => {
+    if (searchResults.length === 0) return;
+    const wrapped = ((index % searchResults.length) + searchResults.length) % searchResults.length;
+    setCurrentResultIndex(wrapped);
+    const result = searchResults[wrapped];
+    // If different page, navigate first
+    if (result.page_path !== currentPagePath && onPageSwitch) {
+      onPageSwitch(result.page_path);
+      // Scroll after page loads
+      setTimeout(() => {
+        document.getElementById(result.block_id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 500);
+    } else {
+      document.getElementById(result.block_id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [searchResults, currentPagePath, onPageSwitch]);
+
+  // CSS Custom Highlight API for search matches.
+  // Uses MutationObserver to re-apply highlights when DOM changes (React re-renders,
+  // Mermaid async rendering, block collapse, etc.) so highlights don't go stale.
+  useEffect(() => {
+    // @ts-ignore - CSS Custom Highlight API
+    if (!CSS.highlights) return;
+
+    // @ts-ignore
+    CSS.highlights.delete('wiki-search');
+
+    if (!searchQuery) return;
+
+    const applyHighlights = () => {
+      // @ts-ignore
+      CSS.highlights.delete('wiki-search');
+
+      const container = containerRef.current;
+      if (!container) return;
+
+      const wikiRoot = container.querySelector('.wiki-root');
+      if (!wikiRoot) return;
+
+      const ranges: Range[] = [];
+      const walker = document.createTreeWalker(wikiRoot, NodeFilter.SHOW_TEXT);
+
+      let textNode: Text | null;
+      while ((textNode = walker.nextNode() as Text | null)) {
+        const text = textNode.nodeValue || '';
+        let idx = text.indexOf(searchQuery);
+        while (idx !== -1) {
+          const range = new Range();
+          range.setStart(textNode, idx);
+          range.setEnd(textNode, idx + searchQuery.length);
+          ranges.push(range);
+          idx = text.indexOf(searchQuery, idx + searchQuery.length);
+        }
+      }
+
+      if (ranges.length > 0) {
+        // @ts-ignore
+        const highlight = new Highlight(...ranges);
+        // @ts-ignore
+        CSS.highlights.set('wiki-search', highlight);
+      }
+    };
+
+    // Initial apply after DOM settles
+    const timer = setTimeout(applyHighlights, 100);
+
+    // Re-apply when DOM mutates (React re-renders, Mermaid async render, etc.)
+    const container = containerRef.current;
+    const wikiRoot = container?.querySelector('.wiki-root');
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let observer: MutationObserver | null = null;
+
+    if (wikiRoot) {
+      observer = new MutationObserver(() => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(applyHighlights, 50);
+      });
+      observer.observe(wikiRoot, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
+
+    return () => {
+      clearTimeout(timer);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      observer?.disconnect();
+    };
+  }, [searchQuery, blocks]);
+
+  // Ctrl/Cmd+F shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+      if (e.key === 'Escape' && isSearchOpen) {
+        setIsSearchOpen(false);
+        setSearchQuery('');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isSearchOpen]);
 
   // Resizable navigator state
   const [navigatorWidth, setNavigatorWidth] = useState(280);
@@ -307,9 +443,107 @@ const WikiContentInner: React.FC<WikiContentProps> = ({
                 </>
               )}
             </div>
+            {/* Search Button */}
+            <button
+              onClick={() => { setIsSearchOpen(!isSearchOpen); setTimeout(() => searchInputRef.current?.focus(), 50); }}
+              className={`flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
+                isSearchOpen
+                  ? isDarkMode ? 'bg-[#58a6ff]/20 text-[#58a6ff]' : 'bg-[#0071E3]/10 text-[#0071E3]'
+                  : isDarkMode ? 'bg-[#30363d] text-[#7d8590] hover:text-[#e6edf3]' : 'bg-white/50 text-[#86868b] hover:text-[#1d1d1f]'
+              }`}
+              title="搜索 (Ctrl+F)"
+            >
+              <Search size={14} />
+            </button>
             <span className={`text-xs font-mono ${isDarkMode ? 'text-[#7d8590]' : 'text-[#d2d2d7]'}`}>{countTreeNodes(blocks)} 个对象</span>
           </div>
         </div>
+
+        {/* Search Bar */}
+        {isSearchOpen && (
+          <div className={`mb-4 flex items-center gap-2 px-3 py-2 rounded-xl border transition-all ${
+            isDarkMode
+              ? 'bg-[#161b22] border-[#30363d]'
+              : 'bg-white/60 border-gray-200/60 backdrop-blur-sm'
+          }`}>
+            <Search size={14} className={isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'} />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  goToResult(e.shiftKey ? currentResultIndex - 1 : currentResultIndex + 1);
+                }
+              }}
+              placeholder="搜索内容..."
+              className={`flex-1 bg-transparent outline-none text-sm ${
+                isDarkMode ? 'text-[#e6edf3] placeholder:text-[#7d8590]' : 'text-[#1d1d1f] placeholder:text-[#86868b]'
+              }`}
+            />
+            {searchQuery && (
+              <span className={`text-xs whitespace-nowrap ${isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'}`}>
+                {isSearching ? '搜索中...' : searchResults.length > 0 ? `${currentResultIndex + 1}/${searchResults.length}` : '无匹配'}
+              </span>
+            )}
+            <button onClick={() => goToResult(currentResultIndex - 1)} disabled={searchResults.length === 0}
+              className={`p-1 rounded transition-colors disabled:opacity-30 ${isDarkMode ? 'hover:bg-[#30363d]' : 'hover:bg-gray-100'}`}>
+              <ArrowUp size={14} />
+            </button>
+            <button onClick={() => goToResult(currentResultIndex + 1)} disabled={searchResults.length === 0}
+              className={`p-1 rounded transition-colors disabled:opacity-30 ${isDarkMode ? 'hover:bg-[#30363d]' : 'hover:bg-gray-100'}`}>
+              <ArrowDown size={14} />
+            </button>
+            <button onClick={() => { setIsSearchOpen(false); setSearchQuery(''); setSearchResults([]); }}
+              className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-[#30363d] text-[#7d8590]' : 'hover:bg-gray-100 text-[#86868b]'}`}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Search Results Preview */}
+        {isSearchOpen && searchResults.length > 0 && (
+          <div className={`mb-4 rounded-xl border overflow-hidden max-h-64 overflow-y-auto ${
+            isDarkMode ? 'bg-[#161b22] border-[#30363d]' : 'bg-white/60 border-gray-200/60 backdrop-blur-sm'
+          }`}>
+            {searchResults.map((result, i) => {
+              const fileName = result.page_path.replace(/\.json$/, '').split('/').pop() || result.page_path;
+              const isCurrent = i === currentResultIndex;
+              return (
+                <button
+                  key={`${result.page_path}-${result.block_id}-${i}`}
+                  onClick={() => goToResult(i)}
+                  className={`w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors border-b last:border-b-0 ${
+                    isCurrent
+                      ? isDarkMode ? 'bg-[#58a6ff]/10 border-[#30363d]' : 'bg-blue-50/80 border-gray-100'
+                      : isDarkMode ? 'hover:bg-[#21262d] border-[#30363d]' : 'hover:bg-white/80 border-gray-100'
+                  }`}
+                >
+                  <span className={`text-[10px] font-medium truncate ${
+                    isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'
+                  }`}>
+                    {fileName}
+                  </span>
+                  <span className={`text-xs truncate ${
+                    isDarkMode ? 'text-[#e6edf3]' : 'text-[#1d1d1f]'
+                  }`}>
+                    {(() => {
+                      const idx = result.preview.indexOf(searchQuery);
+                      if (idx === -1) return result.preview;
+                      return (<>
+                        {result.preview.slice(0, idx)}
+                        <mark className={`rounded px-0.5 ${isDarkMode ? 'bg-yellow-500/30 text-yellow-200' : 'bg-yellow-200 text-yellow-900'}`}>
+                          {result.preview.slice(idx, idx + searchQuery.length)}
+                        </mark>
+                        {result.preview.slice(idx + searchQuery.length)}
+                      </>);
+                    })()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Wiki Content */}
         <div className="space-y-1 wiki-root">

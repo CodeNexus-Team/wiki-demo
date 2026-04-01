@@ -7,7 +7,7 @@ import { WikiBlock, MermaidMetadata, WikiSource, Neo4jIdMapping } from '../types
 import { Plus, Check, GitCommitHorizontal, Trash2, FileDiff, Code, ChevronRight, ChevronDown, MoreHorizontal, Database, Edit3 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { ghcolors, vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { WikiTheme, appleTheme } from '../config/wikiThemes';
+import { WikiTheme, notionTheme } from '../config/wikiThemes';
 
 interface WikiBlockRendererProps {
   block: WikiBlock;
@@ -134,10 +134,10 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   highlightedMermaidNodeId,
   onMermaidDoubleClick,
   onMermaidEdit,
-  theme = appleTheme,
+  theme = notionTheme,
   isDarkMode = false,
   wikiPages = [],
-  onPageNavigate
+  onPageNavigate,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -212,9 +212,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
           : 'bg-green-50/60 border-green-200/60 hover:border-green-300';
       default:
         return isSelected
-          ? isDarkMode
-            ? 'bg-[#58a6ff]/10 border-[#58a6ff]/30'
-            : 'bg-[#0071E3]/[0.03] border-blue-100'
+          ? theme.selectedBlock
           : isDarkMode
             ? 'border-transparent hover:bg-[#161b22] hover:shadow-[0_1px_6px_rgba(0,0,0,0.3)] hover:border-[#30363d]'
             : 'border-transparent hover:bg-white hover:shadow-[0_1px_6px_rgba(0,0,0,0.02)] hover:border-gray-200/50';
@@ -510,7 +508,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                   tr: ({node, ...props}) => <tr className={theme.tr} {...props} />,
                   th: ({node, ...props}) => <th className={theme.th} style={{ wordBreak: 'break-word' }} {...props} />,
                   td: ({node, ...props}) => <td className={theme.td} style={{ wordBreak: 'break-word' }} {...props} />,
-                  code: ({node, ...props}) => <code className={theme.inlineCode} style={{ wordBreak: 'break-all' }} {...props} />
+                  code: ({node, ...props}) => <code className={theme.inlineCode} style={{ wordBreak: 'break-all' }} {...props} />,
                 }}
               >
                 {content}
@@ -738,6 +736,7 @@ export default React.memo(WikiBlockRenderer, (prevProps, nextProps) => {
     prevProps.block.isCollapsed === nextProps.block.isCollapsed &&
     prevProps.block.children === nextProps.block.children &&
     prevProps.isSelected === nextProps.isSelected &&
+    prevProps.selectedBlockIds === nextProps.selectedBlockIds &&
     prevProps.highlightedBlockId === nextProps.highlightedBlockId &&
     prevProps.highlightedMermaidNodeId === nextProps.highlightedMermaidNodeId &&
     prevProps.isDarkMode === nextProps.isDarkMode &&

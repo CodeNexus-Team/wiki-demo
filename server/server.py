@@ -23,7 +23,7 @@ from backend_mock import (
     detailed_query_mock,
     expand_query_mock
 )
-from agent import run_detailed_query
+from agent import run_detailed_query, run_qa_query
 
 # 导入实际的 expand_query 实现
 #from fy.intent_understand.expand_query import expand_user_query
@@ -98,6 +98,12 @@ class DetailedQueryRequest(BaseModel):
     page_path: str = Field(..., description="当前页面路径")
     block_ids: List[str] = Field(..., description="用户选中的 block ID 列表")
     user_query: str = Field(..., description="用户的查询指令")
+
+
+class QaQueryRequest(BaseModel):
+    """自由问答请求模型"""
+    page_path: str = Field(..., description="当前页面路径")
+    user_query: str = Field(..., description="用户的问题")
 
 
 class ClarificationAnswerRequest(BaseModel):
@@ -352,6 +358,78 @@ async def list_wikis_api() -> List[Dict[str, Any]]:
         raise HTTPException(status_code=500, detail=f"获取 Wiki 列表失败: {str(e)}")
 
 
+@app.get("/api/search_wiki")
+async def search_wiki_api(q: str) -> List[Dict[str, Any]]:
+    """
+    全库搜索 wiki 内容，返回包含搜索词的 block 列表。
+    """
+    if not q.strip():
+        return []
+
+    wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+    if os.path.isabs(wiki_root):
+        base_dir = wiki_root
+    else:
+        base_dir = os.path.join(os.path.dirname(__file__), wiki_root)
+
+    import glob as glob_mod
+
+    results = []
+
+    def make_preview(text: str, query: str, radius: int = 50) -> str:
+        """以匹配词为中心截取上下文"""
+        text_flat = text.replace("\n", " ")
+        idx = text_flat.find(query)
+        if idx == -1:
+            return text_flat[:120]
+        start = max(0, idx - radius)
+        end = min(len(text_flat), idx + len(query) + radius)
+        preview = text_flat[start:end]
+        if start > 0:
+            preview = "..." + preview
+        if end < len(text_flat):
+            preview = preview + "..."
+        return preview
+
+    def search_blocks(blocks: list, query: str, page_path: str):
+        for block in blocks:
+            # text block
+            content = block.get("content")
+            if isinstance(content, dict):
+                md = content.get("markdown", "")
+                if query in md:
+                    results.append({
+                        "page_path": page_path,
+                        "block_id": block.get("id", ""),
+                        "preview": make_preview(md, query),
+                    })
+            # section title
+            title = block.get("title", "")
+            if title and query in title:
+                results.append({
+                    "page_path": page_path,
+                    "block_id": block.get("id", ""),
+                    "preview": make_preview(title, query),
+                })
+            # recurse children
+            children = block.get("content")
+            if isinstance(children, list):
+                search_blocks(children, query, page_path)
+
+    pattern = os.path.join(base_dir, "**", "*.json")
+    for json_file in glob_mod.glob(pattern, recursive=True):
+        rel_path = os.path.relpath(json_file, base_dir)
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            page_content = data.get("markdown_content", [])
+            search_blocks(page_content, q.strip(), rel_path)
+        except Exception:
+            continue
+
+    return results
+
+
 @app.get("/api/scan_wikis")
 async def scan_wikis_api() -> ExecuteWorkflowResponse:
     """
@@ -547,6 +625,57 @@ async def clarification_answer(request: ClarificationAnswerRequest):
         raise HTTPException(status_code=404, detail="没有待回答的澄清问题，可能已超时或已回答")
     future.set_result(request.answer)
     return {"status": "ok", "message": "回答已提交，Agent 将继续执行"}
+
+
+@app.post("/api/qa_query")
+async def qa_query(request: QaQueryRequest):
+    """
+    Wiki & 源码自由问答（SSE 流式响应）
+
+    事件类型:
+    - progress    : {"type": "progress", "message": "..."}
+    - result      : {"type": "result", "answer": "..."}
+    - error       : {"type": "error", "message": "..."}
+    """
+    async def event_stream():
+        progress_queue: asyncio.Queue = asyncio.Queue()
+
+        def on_progress(msg: str):
+            progress_queue.put_nowait(("progress", msg))
+
+        try:
+            wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+
+            task = asyncio.create_task(run_qa_query(
+                request.page_path,
+                request.user_query,
+                wiki_root=wiki_root,
+                on_progress=on_progress,
+            ))
+
+            while not task.done():
+                try:
+                    item = await asyncio.wait_for(progress_queue.get(), timeout=0.3)
+                except asyncio.TimeoutError:
+                    continue
+                if isinstance(item, tuple) and item[0] == "progress":
+                    _, msg = item
+                    yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+
+            # Drain remaining progress
+            while not progress_queue.empty():
+                item = progress_queue.get_nowait()
+                if isinstance(item, tuple) and item[0] == "progress":
+                    _, msg = item
+                    yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+
+            answer = task.result()
+            yield f"data: {json.dumps({'type': 'result', 'answer': answer}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'问答失败: {str(e)}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/apply_changes")

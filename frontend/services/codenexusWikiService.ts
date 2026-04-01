@@ -420,6 +420,85 @@ class CodeNexusWikiService {
   }
 
   /**
+   * 自由问答：针对当前 Wiki 页面和源码提问
+   */
+  async qaQuery(
+    pagePath: string,
+    userQuery: string,
+    onProgress?: (message: string) => void
+  ): Promise<string> {
+    const request = { page_path: pagePath, user_query: userQuery };
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/qa_query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+
+      if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('无法读取响应流');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let answer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (!payload) continue;
+
+          try {
+            const event = JSON.parse(payload);
+            if (event.type === 'progress') {
+              onProgress?.(event.message);
+            } else if (event.type === 'result') {
+              answer = event.answer;
+            } else if (event.type === 'error') {
+              throw new Error(event.message);
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message !== payload) throw e;
+          }
+        }
+      }
+
+      if (!answer) throw new Error('未收到回答');
+      return answer;
+    } catch (error) {
+      console.error('问答查询失败:', error);
+      throw new Error(`问答查询失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * 全库搜索 wiki 内容
+   */
+  async searchWiki(query: string): Promise<Array<{ page_path: string; block_id: string; preview: string }>> {
+    if (!query.trim()) return [];
+    try {
+      const response = await fetch(`${this.baseUrl}/api/search_wiki?q=${encodeURIComponent(query)}`);
+      if (!response.ok) throw new Error(`API 请求失败: ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      console.error('搜索失败:', error);
+      return [];
+    }
+  }
+
+  /**
    * 测试 API 连接
    */
   async testConnection(): Promise<boolean> {

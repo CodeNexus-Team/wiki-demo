@@ -78,6 +78,9 @@ export interface WikiTheme {
   };
 
 
+  // 选中块高亮样式
+  selectedBlock: string;
+
   // Neo4j ID 卡片样式
   neo4jCard: {
     container: string;        // 容器样式
@@ -157,6 +160,8 @@ export const appleTheme: WikiTheme = {
     border: "border-white/40"
   },
 
+  selectedBlock: "bg-[#0071E3]/[0.06] border-[#0071E3]/25 ring-1 ring-[#0071E3]/15",
+
   neo4jCard: {
     container: "mt-3 px-3 py-2 bg-gradient-to-br from-violet-50/80 to-indigo-50/60 backdrop-blur-sm rounded-xl border border-violet-100/60 shadow-sm flex flex-wrap items-center gap-1.5",
     label: "flex items-center gap-1 text-xs font-medium text-violet-600 mr-1",
@@ -234,6 +239,8 @@ export const githubTheme: WikiTheme = {
     tabInactive: "text-[#656d76] hover:text-[#1f2328]",
     border: "border-[#d1d9e0]"
   },
+
+  selectedBlock: "bg-[#2C974B]/[0.07] border-[#2C974B]/30 ring-1 ring-[#2C974B]/15",
 
   neo4jCard: {
     container: "mt-3 px-3 py-2 bg-[#dafbe1] rounded-md border border-[#2EA44F66] flex flex-wrap items-center gap-1.5",
@@ -313,6 +320,8 @@ export const notionTheme: WikiTheme = {
     border: "border-[#e9e9e7]"
   },
 
+  selectedBlock: "bg-[#37352f]/[0.04] border-[#37352f]/20 ring-1 ring-[#37352f]/10",
+
   neo4jCard: {
     container: "mt-2 px-3 py-2 bg-[#f1f1ef] rounded-lg border border-[#e9e9e7] flex flex-wrap items-center gap-1",
     label: "flex items-center gap-1 text-xs font-medium text-[#9b9a97] mr-1",
@@ -390,6 +399,8 @@ export const technicalTheme: WikiTheme = {
     tabInactive: "text-[#57606a] hover:text-[#24292f]",
     border: "border-[#d0d7de]"
   },
+
+  selectedBlock: "bg-[#0969da]/[0.06] border-[#0969da]/25 ring-1 ring-[#0969da]/15",
 
   neo4jCard: {
     container: "mt-2 px-3 py-2 bg-[#ddf4ff] rounded border-2 border-[#54aeff]/40 flex flex-wrap items-center gap-1",
@@ -470,6 +481,8 @@ export const appleDarkTheme: WikiTheme = {
     border: "border-white/20"
   },
 
+  selectedBlock: "bg-[#2997ff]/[0.08] border-[#2997ff]/35 ring-1 ring-[#2997ff]/20",
+
   neo4jCard: {
     container: "mt-3 px-3 py-2 bg-gradient-to-br from-violet-900/40 to-indigo-900/30 backdrop-blur-sm rounded-xl border border-violet-500/30 shadow-sm flex flex-wrap items-center gap-1.5",
     label: "flex items-center gap-1 text-xs font-medium text-violet-400 mr-1",
@@ -548,6 +561,8 @@ export const githubDarkTheme: WikiTheme = {
     tabInactive: "text-[#7d8590] hover:text-[#e6edf3]",
     border: "border-[#30363d]"
   },
+
+  selectedBlock: "bg-[#3fb950]/[0.08] border-[#3fb950]/35 ring-1 ring-[#3fb950]/20",
 
   neo4jCard: {
     container: "mt-3 px-3 py-2 bg-[#1b4721] rounded-md border border-[#238636] flex flex-wrap items-center gap-1.5",
@@ -628,6 +643,8 @@ export const notionDarkTheme: WikiTheme = {
     border: "border-[#ffffff1a]"
   },
 
+  selectedBlock: "bg-[#ffffff]/[0.06] border-[#ffffff]/20 ring-1 ring-[#ffffff]/10",
+
   neo4jCard: {
     container: "mt-2 px-3 py-2 bg-[#2f2f2f] rounded-lg border border-[#ffffff1a] flex flex-wrap items-center gap-1",
     label: "flex items-center gap-1 text-xs font-medium text-[#ffffff71] mr-1",
@@ -707,6 +724,8 @@ export const technicalDarkTheme: WikiTheme = {
     border: "border-[#30363d]"
   },
 
+  selectedBlock: "bg-[#58a6ff]/[0.08] border-[#58a6ff]/35 ring-1 ring-[#58a6ff]/20",
+
   neo4jCard: {
     container: "mt-2 px-3 py-2 bg-[#1f3a5f] rounded border-2 border-[#58a6ff]/40 flex flex-wrap items-center gap-1",
     label: "flex items-center gap-1 text-xs font-bold uppercase tracking-wide text-[#58a6ff] mr-1",
@@ -727,9 +746,9 @@ export interface ThemePair {
 }
 
 export const themePairs: ThemePair[] = [
+  { id: 'notion', name: 'Notion', light: notionTheme, dark: notionDarkTheme },
   { id: 'apple', name: 'Apple', light: appleTheme, dark: appleDarkTheme },
   { id: 'github', name: 'GitHub', light: githubTheme, dark: githubDarkTheme },
-  { id: 'notion', name: 'Notion', light: notionTheme, dark: notionDarkTheme },
   { id: 'technical', name: 'Technical', light: technicalTheme, dark: technicalDarkTheme }
 ];
 
@@ -747,12 +766,12 @@ export const wikiThemes: WikiTheme[] = [
 
 // 根据 ID 获取主题
 export const getThemeById = (id: string): WikiTheme => {
-  return wikiThemes.find(t => t.id === id) || appleTheme;
+  return wikiThemes.find(t => t.id === id) || notionTheme;
 };
 
 // 根据主题对 ID 和暗色模式获取主题
 export const getThemeByPairAndMode = (pairId: string, isDark: boolean): WikiTheme => {
   const pair = themePairs.find(p => p.id === pairId);
-  if (!pair) return appleTheme;
+  if (!pair) return isDark ? notionDarkTheme : notionTheme;
   return isDark ? pair.dark : pair.light;
 };

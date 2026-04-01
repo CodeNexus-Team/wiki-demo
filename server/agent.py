@@ -107,6 +107,27 @@ source_ids: 3
 - markdown 内容使用中文
 - 只输出修改指令，不要输出解释文字"""
 
+QA_SYSTEM_PROMPT = """你是代码知识问答助手。用户正在浏览一份基于源码生成的 Wiki 文档，并对其中的内容或关联的源码提出问题。
+
+## 核心原则
+- 回答必须基于实际源码或 Wiki 文档内容，禁止凭空编造
+- 优先使用 Read 工具读取源码文件获取准确信息，再用 Grep 搜索补充
+- 仅当需要查询跨模块关系时使用 query_neo4j
+- 如果无法通过工具获取信息，坦诚说明而非猜测
+
+## 工作流程
+1. 理解用户的问题，结合提供的 Wiki 页面内容和结构
+2. 根据"关联源码路径"信息，使用 Read 工具读取对应源码
+3. 如需搜索更多代码，使用 Grep 搜索
+4. 基于事实给出清晰、准确的回答
+5. 源码根目录在 {{SOURCE_ROOT_PATH}}
+
+## 输出格式
+- 使用中文回答
+- 用 markdown 格式组织回答
+- 适当引用源码片段说明问题
+- 回答要简洁明了，直击问题核心"""
+
 # ==================== MCP Server 配置 ====================
 
 # Neo4j MCP Server 脚本路径
@@ -719,3 +740,100 @@ async def run_detailed_query(
                       f"CLI耗时={cli_duration:.2f}s, 总耗时={total_duration:.2f}s")
     agent_logger.info("=" * 60)
     return result
+
+
+async def run_qa_query(
+    page_path: str,
+    user_query: str,
+    wiki_root: str,
+    on_progress: Optional[callable] = None,
+) -> str:
+    """
+    Wiki & 源码自由问答智能体。
+
+    Args:
+        page_path: 当前 Wiki 页面路径
+        user_query: 用户问题
+        wiki_root: Wiki 文件根目录
+        on_progress: 可选进度回调
+
+    Returns:
+        str: markdown 格式的回答文本
+    """
+    def _progress(msg: str):
+        if on_progress:
+            on_progress(msg)
+
+    t_start = time.time()
+    agent_logger.info("=" * 60)
+    agent_logger.info(f"[QA] 新请求: page_path={page_path}, user_query={user_query}")
+
+    # 1. 加载当前页面
+    _progress("正在加载页面数据...")
+    page_path_clean = page_path.lstrip("/")
+    if os.path.isabs(wiki_root):
+        json_path = os.path.join(wiki_root, page_path_clean)
+    else:
+        json_path = os.path.join(os.path.dirname(__file__), wiki_root, page_path_clean)
+
+    if not os.path.isfile(json_path):
+        raise FileNotFoundError(f"Wiki 页面文件不存在: {json_path}")
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        page_data = json.load(f)
+
+    page_content = page_data.get("markdown_content", [])
+
+    # 2. 构建页面概览和全文摘要
+    outline = build_page_outline(page_content)
+
+    # 3. 提取全页面 neo4j 信息用于关联源码
+    all_neo4j_info = {}
+    for block in page_content:
+        all_neo4j_info.update(extract_neo4j_info(block))
+
+    source_context = ""
+    if all_neo4j_info:
+        source_lines = []
+        for key, info in all_neo4j_info.items():
+            src = info["source"]
+            nid = info["neo4j_id"]
+            if src:
+                source_lines.append(f"- [{key}]: 源码路径={src} (neo4j_id={nid})")
+        if source_lines:
+            source_context = "\n## 关联源码路径\n以下是本页面关联的源码文件，可按需读取：\n" + "\n".join(source_lines)
+            source_context += f"\n\n源码根目录: {SOURCE_ROOT_PATH or '(未配置)'}"
+
+    # 4. 构建 prompt
+    system_prompt = QA_SYSTEM_PROMPT.replace("{{SOURCE_ROOT_PATH}}", SOURCE_ROOT_PATH or "(未配置)")
+    prompt = f"""{system_prompt}
+
+## 当前 Wiki 页面结构
+{outline}
+{source_context}
+
+## 用户问题
+{user_query}"""
+
+    agent_logger.info(f"[QA] Prompt 构建完成: 长度={len(prompt)}")
+    agent_logger.debug(f"[QA] Prompt 完整内容:\n{prompt}")
+    _progress("正在调用 AI 模型...")
+
+    # 5. 执行 Claude CLI
+    cli_cmd = [
+        "claude", "-p", prompt,
+        "--model", CLAUDE_MODEL,
+        "--output-format", "stream-json",
+        "--verbose",
+        "--mcp-config", _build_mcp_config(),
+        "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j",
+    ]
+
+    agent_text, _ = await _run_claude_streaming(
+        cli_cmd, SOURCE_ROOT_PATH or None, on_progress
+    )
+
+    t_end = time.time()
+    agent_logger.info(f"[QA] 完成: 回答长度={len(agent_text)}, 耗时={t_end - t_start:.2f}s")
+    agent_logger.info("=" * 60)
+    return agent_text

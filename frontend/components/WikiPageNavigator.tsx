@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ChevronDown, ChevronRight, FileText, Folder, PanelLeftClose, List } from 'lucide-react';
 import { WikiBlock } from '../types';
-import { WikiTheme, appleTheme } from '../config/wikiThemes';
+import { WikiTheme, notionTheme } from '../config/wikiThemes';
 
 interface WikiPageNode {
   path: string;
@@ -209,7 +209,7 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
   onToggleVisibility,
   blocks = [],
   onBlockClick,
-  theme = appleTheme,
+  theme = notionTheme,
   isDarkMode = false
 }) => {
   // 缓存 tree 结构，避免每次渲染都重新生成

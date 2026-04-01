@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AnalysisType, WikiBlock, MermaidMetadata, ExpandedQuestion, WikiHistoryRecord } from '../types';
-import { geminiService, AVAILABLE_MODELS } from '../services/geminiService';
 import { codenexusWikiService } from '../services/codenexusWikiService';
 import { wikiPageCache } from '../services/wikiPageCache';
-import { parseMarkdownToBlocks, parseSingleBlockUpdate } from '../utils/markdownParser';
 import { parseWikiPageToBlocks } from '../utils/wikiContentParser';
-import { toggleBlockCollapse, insertBlockAfter, updateBlockContent } from '../utils/blockOperations';
+import { toggleBlockCollapse } from '../utils/blockOperations';
 
 // Hooks
 import {
@@ -34,10 +32,7 @@ import {
   ArrowLeft,
   Sparkles,
   Eraser,
-  ChevronUp,
   Bot,
-  Cpu,
-  Check,
   Sun,
   Moon
 } from 'lucide-react';
@@ -75,8 +70,6 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   // Local State
   const [isLoading, setIsLoading] = useState(false);
   const [prompt, setPrompt] = useState<string>('');
-  const [selectedModel, setSelectedModel] = useState<string>(AVAILABLE_MODELS[0].id);
-  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [blocks, setBlocks] = useState<WikiBlock[]>([]);
 
   // 澄清机制：当 Agent 需要用户回答时，存储 resolve 回调和选项列表
@@ -345,9 +338,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setBlocks([]);
     setPrompt('');
     clearHistory();
-    setSuggestions(geminiService.getSuggestions(type));
+    setSuggestions([]);
     setIsChatExpanded(true);
-    setIsModelMenuOpen(false);
     closeSourcePanel();
     setSelectedBlockIds(new Set());
     setIsDiffMode(false);
@@ -374,6 +366,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   }, [isSourcePanelOpen, highlightedBlockId]);
 
   const hasContent = blocks.length > 0 || chatHistory.length > 0 || isLoading;
+  const hasChatContent = chatHistory.length > 0;
 
   // Handlers
   const handleToggleCollapse = useCallback((blockId: string) => {
@@ -472,13 +465,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       id: Date.now().toString(),
       timestamp: Date.now(),
       userQuery,
-      modelId: selectedModel,
+      modelId: 'codenexus-wiki',
       pagePath: finalPagePath || undefined,
       wikiPages: finalWikiPages.length > 0 ? finalWikiPages : undefined,
       blocksCount: generatedBlocks.length
     };
     setWikiHistory(prev => [record, ...prev].slice(0, 50));
-  }, [currentPagePath, wikiPages, selectedModel, setWikiHistory]);
+  }, [currentPagePath, wikiPages, setWikiHistory]);
 
   const handleQuestionConfirm = useCallback(async (selectedQuestions: ExpandedQuestion[]) => {
     setShowQuestionSelector(false);
@@ -574,12 +567,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     const assistantMsgId = addAssistantMessage(['初始化请求...']);
 
     try {
-      const currentModelName = AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name || selectedModel;
       let finalContent = '';
 
-      // CodeNexus Wiki model
-      if (selectedModel === 'codenexus-wiki') {
-        if (hasSelectedBlocks && currentPagePath) {
+      if (hasSelectedBlocks && currentPagePath) {
           updateAssistantProgress(assistantMsgId, `检测到 ${currentSelectedIds.size} 个选中的块，正在执行块级细化...`);
 
           const blockIds = Array.from(currentSelectedIds);
@@ -665,83 +655,37 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           return;
         }
 
-        // CodeNexus Workflow - expand query
-        updateAssistantProgress(assistantMsgId, '正在使用 CodeNexus AI 分析您的问题...');
-        const questions = await codenexusWikiService.expandQuery(currentPrompt);
+        // 有页面时 → 自由问答；无页面时 → 生成 Wiki 工作流
+        if (currentPagePath) {
+          updateAssistantProgress(assistantMsgId, '正在分析您的问题...');
+          const answer = await codenexusWikiService.qaQuery(
+            currentPagePath,
+            currentPrompt,
+            (msg) => updateAssistantProgress(assistantMsgId, msg)
+          );
+          finalizeAssistantMessage(assistantMsgId, answer);
+        } else {
+          updateAssistantProgress(assistantMsgId, '正在使用 CodeNexus AI 分析您的问题...');
+          const questions = await codenexusWikiService.expandQuery(currentPrompt);
 
-        setCurrentUserQuery(currentPrompt);
-        setExpandedQuestions(questions);
-        updateAssistantProgress(assistantMsgId, `生成了 ${questions.length} 个扩展问题，等待您的选择...`);
+          setCurrentUserQuery(currentPrompt);
+          setExpandedQuestions(questions);
+          updateAssistantProgress(assistantMsgId, `生成了 ${questions.length} 个扩展问题，等待您的选择...`);
 
-        setShowQuestionSelector(true);
-        setIsLoading(false);
+          setShowQuestionSelector(true);
+          setIsLoading(false);
 
-        setChatHistory(prev => prev.map(msg =>
-          msg.id === assistantMsgId
-            ? {
-                ...msg,
-                content: `我已经为您生成了 ${questions.length} 个扩展问题，请选择您感兴趣的分析维度。`,
-                steps: [...(msg.steps || []), '等待用户选择问题...']
-              }
-            : msg
-        ));
+          setChatHistory(prev => prev.map(msg =>
+            msg.id === assistantMsgId
+              ? {
+                  ...msg,
+                  content: `我已经为您生成了 ${questions.length} 个扩展问题，请选择您感兴趣的分析维度。`,
+                  steps: [...(msg.steps || []), '等待用户选择问题...']
+                }
+              : msg
+          ));
+        }
         return;
-      }
-
-      // Other models (Gemini, etc.)
-      if (hasSelectedBlocks) {
-        const operations = await geminiService.refineBlocks(referencedBlocks, currentPrompt, selectedModel, (step) => updateAssistantProgress(assistantMsgId, step));
-
-        updateAssistantProgress(assistantMsgId, '正在构建差异预览...');
-
-        let newBlocks = [...blocks];
-        let addedCount = 0;
-        let updatedCount = 0;
-        let deletedCount = 0;
-
-        operations.forEach(op => {
-          if (op.action === 'DELETE') {
-            newBlocks = newBlocks.map(b => b.id === op.targetId ? { ...b, status: 'deleted' as const } : b);
-            deletedCount++;
-          }
-          if (op.action === 'UPDATE' && op.content) {
-            newBlocks = updateBlockContent(newBlocks, op.targetId, op.content);
-            updatedCount++;
-          }
-          if (op.action === 'INSERT_AFTER' && op.content) {
-            const { content: cleanContent, metadata } = parseSingleBlockUpdate(op.content);
-            const newBlock: WikiBlock = {
-              id: `block-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-              type: op.type || 'paragraph',
-              content: cleanContent,
-              level: op.level,
-              status: 'inserted',
-              metadata: metadata
-            };
-            newBlocks = insertBlockAfter(newBlocks, op.targetId, newBlock);
-            addedCount++;
-          }
-        });
-
-        enterDiffMode(newBlocks);
-        finalContent = `已生成内容变更预览。请在文档底部审查变更，点击"应用变更"以生效。`;
-      } else {
-        const resultText = await geminiService.analyze(type, currentPrompt, selectedModel, (step) => updateAssistantProgress(assistantMsgId, step));
-        updateAssistantProgress(assistantMsgId, '解析 Wiki 对象结构...');
-        const parsedBlocks = parseMarkdownToBlocks(resultText);
-        setBlocks(parsedBlocks);
-        setIsDiffMode(false);
-
-        // Create tab for generated content (use a virtual path based on type)
-        const virtualPath = `/${type.toLowerCase()}/generated-${Date.now()}.json`;
-        clearTabs();
-        openTab(virtualPath, parsedBlocks);
-
-        finalContent = `已生成 ${TITLE_MAP[type]} 的完整分析报告，包含 ${parsedBlocks.length} 个交互式对象。`;
-        saveToHistory(currentPrompt, parsedBlocks);
-      }
-
-      finalizeAssistantMessage(assistantMsgId, finalContent);
 
     } catch (error) {
       console.error("Analysis Failed:", error);
@@ -750,7 +694,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, selectedModel, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode, openTab, clearTabs, forceActivateTab, saveTabStateById, cancelPendingLoad]);
+  }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode, openTab, clearTabs, forceActivateTab, saveTabStateById, cancelPendingLoad]);
 
   return (
     <div className={`h-full relative flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0d1117]' : 'bg-[#F5F5F7]'}`}>
@@ -904,15 +848,15 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
         {/* Main Chat Container */}
         <div
-          className={`relative backdrop-blur-xl border flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${hasContent ? 'rounded-t-[2rem]' : 'rounded-[2rem] mb-10'} ${!isChatExpanded && hasContent ? 'translate-y-[calc(100%-110px)]' : 'translate-y-0'} ${
+          className={`relative backdrop-blur-xl border flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] rounded-[2rem] mb-4 ${!isChatExpanded && hasChatContent ? 'translate-y-[calc(100%-110px)]' : 'translate-y-0'} ${
             isDarkMode
               ? 'bg-[#161b22]/90 shadow-[0_-10px_40px_rgba(0,0,0,0.3)] border-[#30363d]'
               : 'bg-white/85 shadow-[0_-10px_40px_rgba(0,0,0,0.08)] border-white/50'
           }`}
-          style={hasContent ? { width: chatWidth, height: isChatExpanded ? chatHeight : 110, maxHeight: '90vh', minWidth: 400, willChange: isChatDraggingRef.current ? 'width, height' : 'auto' } : { width: 768 }}
+          style={hasChatContent ? { width: chatWidth, height: isChatExpanded ? chatHeight : 110, maxHeight: 'calc(90vh - 1rem)', minWidth: 400, willChange: isChatDraggingRef.current ? 'width, height' : 'auto' } : { width: 768 }}
         >
           {/* Resize handles */}
-          {hasContent && (
+          {hasChatContent && (
             <>
               <div className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-200/50 z-10" {...getResizeHandlers('left')} />
               <div className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-200/50 z-10" {...getResizeHandlers('right')} />
@@ -921,7 +865,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
           )}
 
           {/* Drag Handle for Collapse/Expand */}
-          {hasContent && (
+          {hasChatContent && (
             <div
               className="w-full flex justify-center py-3 cursor-pointer hover:bg-black/5 transition-colors group"
               onClick={() => setIsChatExpanded(!isChatExpanded)}
@@ -932,7 +876,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
           {/* Chat History Area */}
           <div
-            className={`flex-1 overflow-y-auto scroll-smooth px-6 transition-all duration-300 ${!isChatExpanded && hasContent ? 'h-0 opacity-0 py-0 flex-none' : 'opacity-100 py-4'}`}
+            className={`flex-1 overflow-y-auto scroll-smooth px-6 transition-all duration-300 ${!isChatExpanded && hasChatContent ? 'h-0 opacity-0 py-0 flex-none' : 'opacity-100 py-4'}`}
             ref={chatScrollRef}
           >
             {chatHistory.map((msg) => (
@@ -1001,7 +945,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder={hasSelection ? "针对选中的内容，请输入您的修改建议..." : "描述分析需求..."}
+              placeholder={hasSelection ? "针对选中的内容，请输入您的修改建议..." : currentPagePath ? "选择内容以修改，或直接提问..." : "描述分析需求..."}
               className={`w-full bg-transparent outline-none resize-none font-light transition-all duration-300 ${hasContent ? 'text-base min-h-[50px] max-h-[120px]' : 'text-lg min-h-[80px]'} ${
                 isDarkMode ? 'text-[#e6edf3] placeholder:text-[#7d8590]/50' : 'text-[#1d1d1f] placeholder:text-[#86868b]/50'
               }`}
@@ -1013,56 +957,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
               }}
             />
 
-            <div className="flex justify-between items-center mt-2">
-              {/* Model Selector */}
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <button
-                    onClick={() => setIsModelMenuOpen(!isModelMenuOpen)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs transition-colors ${
-                      isDarkMode
-                        ? 'bg-[#21262d]/50 hover:bg-[#21262d] border-[#30363d] text-[#e6edf3]'
-                        : 'bg-gray-100/50 hover:bg-gray-100 border-gray-200/50 text-[#1d1d1f]'
-                    }`}
-                  >
-                    <Cpu size={12} className={isDarkMode ? 'text-[#58a6ff]' : 'text-[#0071E3]'} />
-                    {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
-                    <ChevronUp size={12} className={`text-gray-400 transition-transform ${isModelMenuOpen ? 'rotate-180' : ''}`} />
-                  </button>
-
-                  {isModelMenuOpen && (
-                    <>
-                      <div className="fixed inset-0 z-[100]" onClick={() => setIsModelMenuOpen(false)} />
-                      <div className={`absolute bottom-full left-0 mb-2 w-48 rounded-xl shadow-apple-hover border overflow-hidden animate-in fade-in zoom-in-95 duration-200 z-[101] ${
-                        isDarkMode ? 'bg-[#161b22] border-[#30363d]' : 'bg-white border-gray-100'
-                      }`}>
-                        {AVAILABLE_MODELS.map(model => (
-                          <button
-                            key={model.id}
-                            onClick={() => {
-                              setSelectedModel(model.id);
-                              setIsModelMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-2.5 text-xs flex items-center justify-between transition-colors ${
-                              selectedModel === model.id
-                                ? isDarkMode
-                                  ? 'text-[#58a6ff] font-medium bg-[#58a6ff]/10'
-                                  : 'text-[#0071E3] font-medium bg-blue-50/50'
-                                : isDarkMode
-                                  ? 'text-[#e6edf3] hover:bg-[#21262d]'
-                                  : 'text-[#1d1d1f] hover:bg-gray-50'
-                            }`}
-                          >
-                            {model.name}
-                            {selectedModel === model.id && <Check size={12} className={isDarkMode ? 'text-[#58a6ff]' : 'text-[#0071E3]'} />}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-
+            <div className="flex justify-end items-center mt-2">
               <div className="flex items-center gap-2">
                 {prompt && !isLoading && (
                   <button
