@@ -7,12 +7,14 @@ interface ChatMessageProps {
   message: ChatMessageType;
   isLoading?: boolean;
   variant?: 'blue' | 'orange';
+  onClarificationSelect?: (option: string) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
   isLoading = false,
-  variant = 'blue'
+  variant = 'blue',
+  onClarificationSelect
 }) => {
   const isUser = message.role === 'user';
   const isFinished = !!message.content && message.content.length > 0 && !isLoading;
@@ -61,6 +63,28 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             }
           `}>
             {message.content}
+
+            {/* Clarification Options */}
+            {!isUser && message.clarificationOptions && message.clarificationOptions.length > 0 && onClarificationSelect && (
+              <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-[#e5e5ea]/60">
+                {message.clarificationOptions.map((opt, i) => {
+                  const isOther = opt.includes('其他');
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => onClarificationSelect(opt)}
+                      className={`px-3 py-1.5 rounded-lg text-xs transition-all ${
+                        isOther
+                          ? 'border border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-600'
+                          : 'bg-[#f0f5ff] text-[#0071E3] hover:bg-[#dbe8ff] border border-[#c5d9f5]'
+                      }`}
+                    >
+                      {opt}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

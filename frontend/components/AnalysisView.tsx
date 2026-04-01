@@ -78,6 +78,12 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   const [selectedModel, setSelectedModel] = useState<string>(AVAILABLE_MODELS[0].id);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [blocks, setBlocks] = useState<WikiBlock[]>([]);
+
+  // 澄清机制：当 Agent 需要用户回答时，存储 resolve 回调和选项列表
+  const clarificationResolverRef = useRef<((answer: string) => void) | null>(null);
+  const setClarificationResolver = (resolver: (answer: string) => void) => {
+    clarificationResolverRef.current = resolver;
+  };
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
   // CodeNexus Workflow State
@@ -538,6 +544,21 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   const handleAnalyze = useCallback(async () => {
     if (!prompt.trim()) return;
     const currentPrompt = prompt.trim();
+
+    // 如果有待处理的澄清问题，将用户输入作为回答提交
+    if (clarificationResolverRef.current) {
+      const resolver = clarificationResolverRef.current;
+      clarificationResolverRef.current = null;
+      addUserMessage(currentPrompt);
+      setPrompt('');
+      // 清除气泡中的选项按钮
+      setChatHistory(prev => prev.map(m =>
+        m.clarificationOptions ? { ...m, clarificationOptions: undefined } : m
+      ));
+      resolver(currentPrompt);
+      return;
+    }
+
     const currentSelectedIds = new Set(selectedBlockIds);
     const hasSelectedBlocks = currentSelectedIds.size > 0;
 
@@ -570,7 +591,19 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             queryPagePath,
             blockIds,
             currentPrompt,
-            (msg) => updateAssistantProgress(assistantMsgId, msg)
+            (msg) => updateAssistantProgress(assistantMsgId, msg),
+            async (question, options) => {
+              // Agent 需要澄清：在聊天气泡中展示问题和可选项
+              setChatHistory(prev => prev.map(msg =>
+                msg.id === assistantMsgId
+                  ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options }
+                  : msg
+              ));
+
+              return new Promise<string>((resolve) => {
+                setClarificationResolver(resolve);
+              });
+            }
           );
 
           // --- After await: all closure-captured values may be stale ---
@@ -903,7 +936,31 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             ref={chatScrollRef}
           >
             {chatHistory.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} isLoading={isLoading} variant="blue" />
+              <ChatMessage
+                key={msg.id}
+                message={msg}
+                isLoading={isLoading}
+                variant="blue"
+                onClarificationSelect={msg.clarificationOptions && clarificationResolverRef.current ? (opt) => {
+                  const isOther = opt.includes('其他');
+                  if (isOther) {
+                    // "其他"选项：清除选项按钮，让用户自由输入
+                    setChatHistory(prev => prev.map(m =>
+                      m.id === msg.id ? { ...m, clarificationOptions: undefined } : m
+                    ));
+                    return;
+                  }
+                  const resolver = clarificationResolverRef.current;
+                  if (resolver) {
+                    clarificationResolverRef.current = null;
+                    setChatHistory(prev => prev.map(m =>
+                      m.id === msg.id ? { ...m, clarificationOptions: undefined } : m
+                    ));
+                    addUserMessage(opt);
+                    resolver(opt);
+                  }
+                } : undefined}
+              />
             ))}
 
             {/* Question Selector */}

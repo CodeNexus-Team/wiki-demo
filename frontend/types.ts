@@ -94,6 +94,7 @@ export interface ChatMessage {
   thinking?: string; // Summary of AI process/reasoning
   steps?: string[]; // Streaming thought steps (e.g. "Parsing...", "Generating...")
   references?: WikiBlock[]; // Context blocks referenced by the user
+  clarificationOptions?: string[]; // Options for clarification questions
   timestamp: number;
 }
 

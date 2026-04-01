@@ -7,7 +7,6 @@ Claude 根据用户需求自主决定需要哪些数据源，收集信息后提�
 
 import os
 import json
-import subprocess
 import asyncio
 import re
 import time
@@ -35,6 +34,8 @@ SOURCE_ROOT_PATH = os.environ.get("SOURCE_ROOT_PATH", "/Users/uinas/code/wiki-de
 
 # ==================== System Prompt ====================
 
+CLARIFICATION_PREFIX = "@@CLARIFY@@"
+
 SYSTEM_PROMPT = """你是 Wiki 文档编辑器。用户选中了一些内容块并提出修改需求。
 
 ## 核心原则
@@ -42,6 +43,30 @@ SYSTEM_PROMPT = """你是 Wiki 文档编辑器。用户选中了一些内容块�
 - 在输出修改前，你必须先通过工具查阅相关源码文件或 Neo4j 数据，确认事实后再撰写
 - 如果工具不可用或查不到数据，只能基于用户提供的已有 block 内容进行润色改写，不得添加未经验证的技术细节
 - source_ids 中填写的 ID 必须来自页面已有的源码引用，或者你通过工具确认存在的文件
+
+## 澄清机制
+在执行任何修改之前，你必须先判断用户指令是否足够明确。以下情况必须触发澄清：
+- 用户指令仅包含"优化"、"改一下"、"调整"、"处理"等笼统词汇，未说明具体方向
+- 用户指令与选中的多个 block 关系不明确
+- 用户指令存在多种合理解读方式
+
+触发澄清时，只输出以下格式，不要输出修改指令，也不要读取源码：
+@@CLARIFY@@
+你的问题描述（一行）
+- 选项1
+- 选项2
+- 选项3
+- 其他（请在输入框说明）
+
+要求：
+- 第一行是问题描述
+- 随后提供 3~5 个可选方向，每行以 `- ` 开头
+- 最后一个选项固定为"其他（请在输入框说明）"
+- 选项要简洁，让用户一眼看懂
+- 选项尽量与用户所选内容相关
+- 问题描述中不要使用 block ID（如 [S73]），应使用该内容块的标题或内容摘要来指代，例如"你希望对「模块功能概述」这段内容做哪种修改？"
+
+等待用户在下一轮对话中选择后再继续执行修改。
 
 ## 工作流程
 1. 阅读用户选中的内容和修改需求
@@ -382,6 +407,122 @@ def build_page_outline(blocks: list, depth: int = 0) -> str:
     return "\n".join(lines)
 
 
+# ==================== 流式 CLI 执行 ====================
+
+
+async def _run_claude_streaming(
+    cli_cmd: List[str],
+    cwd: Optional[str],
+    on_progress: Optional[callable] = None,
+) -> tuple:
+    """
+    使用 asyncio subprocess 流式执行 Claude CLI，实时解析 stream-json 事件。
+
+    Returns:
+        (agent_text, session_id): 最终结果文本和会话 ID
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cli_cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+
+    session_id = None
+    agent_text = ""
+
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode('utf-8').strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type", "")
+            event_subtype = event.get("subtype", "")
+            message = event.get("message", {})
+
+            # system init — 捕获 session_id
+            if event_type == "system" and event_subtype == "init":
+                session_id = event.get("session_id")
+                model = event.get("model", "unknown")
+                tools = event.get("tools", [])
+                tool_names = [t.get("name", "") if isinstance(t, dict) else str(t) for t in tools] if isinstance(tools, list) else []
+                agent_logger.info(f"会话初始化: model={model}, session_id={session_id}, 可用工具={tool_names}")
+
+            # assistant 事件 — 工具调用和文本
+            elif event_type == "assistant" and isinstance(message, dict):
+                for block in message.get("content", []):
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type", "")
+                    if block_type == "tool_use":
+                        tool_name = block.get("name", "unknown")
+                        tool_input = block.get("input", {})
+                        agent_logger.info(f"工具调用: {tool_name} | 输入: {json.dumps(tool_input, ensure_ascii=False)[:500]}")
+                        if on_progress:
+                            if tool_name == "Read":
+                                fp = tool_input.get("file_path", "")
+                                short = fp.split("/")[-1] if fp else "文件"
+                                on_progress(f"正在读取源码: {short}")
+                            elif tool_name == "Grep":
+                                on_progress(f"正在搜索代码: {tool_input.get('pattern', '')[:40]}")
+                            elif "neo4j" in tool_name.lower():
+                                on_progress("正在查询知识图谱...")
+                            else:
+                                on_progress(f"正在使用工具: {tool_name}")
+                    elif block_type == "text":
+                        text = block.get("text", "")
+                        if text.strip():
+                            agent_logger.debug(f"模型文本: {text[:300]}")
+
+            # user 事件 — 工具结果（仅日志）
+            elif event_type == "user":
+                if "tool_use_result" in event:
+                    tool_result = event["tool_use_result"]
+                    agent_logger.debug(f"工具结果: {str(tool_result)[:500]}")
+
+            # 速率限制
+            elif event_type == "rate_limit_event":
+                agent_logger.warning(f"速率限制: {json.dumps(event.get('rate_limit_info', {}), ensure_ascii=False)[:300]}")
+
+            # 最终结果
+            elif event_type == "result":
+                agent_text = str(event.get("result", ""))
+                cost = event.get("cost_usd")
+                duration_ms = event.get("duration_ms")
+                if cost is not None:
+                    agent_logger.info(f"API 费用: ${cost:.4f}")
+                if duration_ms is not None:
+                    agent_logger.info(f"API 内部耗时: {duration_ms}ms")
+
+        await proc.wait()
+
+    except (Exception, asyncio.CancelledError):
+        # 父进程异常或被取消时，确保子进程不会变成孤儿空烧 token
+        if proc.returncode is None:
+            agent_logger.warning(f"正在终止 Claude CLI 子进程 (pid={proc.pid})")
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+            agent_logger.info(f"子进程已终止 (pid={proc.pid})")
+        raise
+
+    if proc.returncode != 0:
+        stderr_bytes = await proc.stderr.read()
+        stderr = stderr_bytes.decode('utf-8')
+        agent_logger.error(f"Claude CLI 失败 (rc={proc.returncode}): {stderr}")
+        raise RuntimeError(f"claude CLI 调用失败: {stderr}")
+
+    return agent_text, session_id
+
+
 # ==================== 核心 agentic loop ====================
 
 
@@ -391,23 +532,88 @@ async def run_detailed_query(
     user_query: str,
     wiki_root: str,
     on_progress: Optional[callable] = None,
+    on_clarify: Optional[callable] = None,
+    resume_session_id: Optional[str] = None,
 ) -> dict:
     """
     使用 Claude agentic loop 处理用户的详细查询请求。
 
     Args:
-        on_progress: 可选的回调函数，接收进度消息字符串。
-                     用于 SSE 流式推送给前端。
+        on_progress: 可选回调，接收进度消息字符串，用于 SSE 推送。
+        on_clarify:  可选 async 回调，接收澄清问题字符串，返回用户回答。
+                     若为 None 且需要澄清，返回 clarification_needed 结果。
+        resume_session_id: 恢复之前会话的 session_id（用于澄清后继续）。
 
     Returns:
-        dict: PageDiffResponse 或 CreatePageResponse 格式的结果
+        dict: PageDiffResponse / CreatePageResponse / clarification_needed 结果
     """
     def _progress(msg: str):
         if on_progress:
             on_progress(msg)
 
+    async def _handle_clarification(agent_text: str, session_id: str) -> dict | None:
+        """检测并处理澄清请求。返回递归调用结果或 clarification_needed dict，无澄清时返回 None。"""
+        if not agent_text.strip().startswith(CLARIFICATION_PREFIX):
+            return None
+
+        raw_clarify = agent_text.strip()[len(CLARIFICATION_PREFIX):].strip()
+        lines = raw_clarify.split("\n")
+        question = lines[0].strip() if lines else raw_clarify
+        options = [line.lstrip("- ").strip() for line in lines[1:] if line.strip().startswith("- ")]
+        agent_logger.info(f"需要澄清: question={question}, options={options}, session_id={session_id}")
+
+        clarify_data = {"question": question, "options": options}
+
+        if on_clarify:
+            answer = await on_clarify(clarify_data)
+            return await run_detailed_query(
+                page_path, block_ids, answer, wiki_root,
+                on_progress=on_progress,
+                on_clarify=on_clarify,
+                resume_session_id=session_id,
+            )
+        else:
+            return {
+                "clarification_needed": True,
+                "question": question,
+                "options": options,
+                "session_id": session_id,
+            }
+
     t_start = time.time()
     agent_logger.info("=" * 60)
+
+    # ---- 恢复模式：用户回答了澄清问题，继续同一会话 ----
+    if resume_session_id:
+        agent_logger.info(f"恢复会话: session_id={resume_session_id}, answer={user_query[:200]}")
+        _progress("用户已回答，继续分析...")
+
+        cli_cmd = [
+            "claude", "--resume", resume_session_id,
+            "-p", user_query,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--mcp-config", _build_mcp_config(),
+            "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j",
+        ]
+
+        agent_text, _ = await _run_claude_streaming(
+            cli_cmd, SOURCE_ROOT_PATH or None, on_progress
+        )
+
+        # 恢复后仍然可能再次澄清（复用统一处理逻辑）
+        clarify_result = await _handle_clarification(agent_text, resume_session_id)
+        if clarify_result is not None:
+            return clarify_result
+
+        _progress("AI 分析完成，正在解析修改指令...")
+        result = parse_agent_output(agent_text)
+        t_end = time.time()
+        agent_logger.info(f"恢复完成: 总耗时={t_end - t_start:.2f}s")
+        agent_logger.info("=" * 60)
+        return result
+
+    # ---- 正常模式 ----
     agent_logger.info(f"新请求: page_path={page_path}, block_ids={block_ids}, user_query={user_query}")
 
     # 1. 加载当前页面
@@ -479,10 +685,8 @@ async def run_detailed_query(
     agent_logger.info(f"Prompt 构建完成: 长度={len(prompt)}, 耗时={t_prompt_ready - t_start:.2f}s")
     agent_logger.debug(f"Prompt 完整内容:\n{prompt}")
     _progress("正在调用 AI 模型进行分析...")
-    print(f"[Agent] 调用 claude CLI (model={CLAUDE_MODEL}), prompt长度={len(prompt)}")
 
-    t_cli_start = time.time()
-    # 构建 CLI 命令，附加 Neo4j MCP Server
+    # 7. 流式执行 Claude CLI
     cli_cmd = [
         "claude", "-p", prompt,
         "--model", CLAUDE_MODEL,
@@ -492,191 +696,20 @@ async def run_detailed_query(
         "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j",
     ]
 
-    def _run_cli():
-        return subprocess.run(
-            cli_cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=SOURCE_ROOT_PATH or None,
-        )
+    agent_text, session_id = await _run_claude_streaming(
+        cli_cmd, SOURCE_ROOT_PATH or None, on_progress
+    )
 
-    try:
-        # Run in thread pool so the event loop stays free for other requests
-        # (e.g. fetch_page) while the CLI is executing.
-        cli_result = await asyncio.to_thread(_run_cli)
-    except FileNotFoundError:
-        raise RuntimeError("未找到 claude CLI，请确认已安装 Claude Code")
-    except subprocess.TimeoutExpired:
-        raise TimeoutError("claude CLI 调用超时（120秒）")
-
-    t_cli_end = time.time()
-    cli_duration = t_cli_end - t_cli_start
-    agent_logger.info(f"Claude CLI 调用完成: 耗时={cli_duration:.2f}s, returncode={cli_result.returncode}")
-
-    if cli_result.returncode != 0:
-        agent_logger.error(f"Claude CLI 失败: {cli_result.stderr}")
-        print(f"[Agent] claude CLI 错误: {cli_result.stderr}")
-        raise RuntimeError(f"claude CLI 调用失败: {cli_result.stderr}")
-
-    # 解析 stream-json 输出：每行一个 JSON 事件
-    raw_output = cli_result.stdout.strip()
-    agent_text = ""
-    for line in raw_output.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        event_type = event.get("type", "")
-        event_subtype = event.get("subtype", "")
-        message = event.get("message", {})
-
-        # assistant 事件：解析 message.content 中的工具调用和文本
-        if event_type == "assistant" and isinstance(message, dict):
-            content_blocks = message.get("content", [])
-            if isinstance(content_blocks, list):
-                for block in content_blocks:
-                    if not isinstance(block, dict):
-                        continue
-                    block_type = block.get("type", "")
-
-                    if block_type == "tool_use":
-                        tool_name = block.get("name", "unknown")
-                        tool_input = block.get("input", {})
-                        agent_logger.info(f"工具调用: {tool_name} | 输入: {json.dumps(tool_input, ensure_ascii=False)[:500]}")
-                        print(f"[Agent] 工具调用: {tool_name}")
-                        # Report tool usage to frontend
-                        if tool_name == "Read":
-                            file_path = tool_input.get("file_path", "")
-                            short = file_path.split("/")[-1] if file_path else "文件"
-                            _progress(f"正在读取源码: {short}")
-                        elif tool_name == "Grep":
-                            pattern = tool_input.get("pattern", "")
-                            _progress(f"正在搜索代码: {pattern[:40]}")
-                        elif tool_name == "Bash":
-                            _progress("正在执行命令...")
-                        elif "neo4j" in tool_name.lower():
-                            _progress("正在查询知识图谱...")
-                        else:
-                            _progress(f"正在使用工具: {tool_name}")
-
-                    elif block_type == "text":
-                        text = block.get("text", "")
-                        if text.strip():
-                            agent_logger.debug(f"模型文本: {text[:300]}")
-
-        # user 事件：解析工具返回结果
-        elif event_type == "user":
-            # 先记录原始结构用于调试
-            agent_logger.debug(f"user 事件 keys={list(event.keys())}, message keys={list(message.keys()) if isinstance(message, dict) else 'N/A'}")
-
-            # 方式1: tool_use_result 在事件顶层
-            if "tool_use_result" in event:
-                tool_result = event["tool_use_result"]
-                agent_logger.debug(f"tool_use_result 类型={type(tool_result).__name__}, 值={str(tool_result)[:500]}")
-
-                if isinstance(tool_result, dict):
-                    tool_name = tool_result.get("name", "unknown")
-                    # Read 工具返回 {"type":"text","file":{"filePath":"...","content":"..."}}
-                    if "file" in tool_result and isinstance(tool_result["file"], dict):
-                        file_info = tool_result["file"]
-                        tool_name = "Read"
-                        content = file_info.get("content", "")
-                        agent_logger.info(f"读取文件: {file_info.get('filePath', '?')}")
-                    # Bash 工具返回 {"stdout":"...","stderr":"..."}
-                    elif "stdout" in tool_result:
-                        tool_name = "Bash"
-                        content = tool_result.get("stdout", "") + tool_result.get("stderr", "")
-                    else:
-                        content = str(tool_result.get("content", "") or tool_result.get("output", ""))
-                elif isinstance(tool_result, str):
-                    tool_name = "unknown"
-                    content = tool_result
-                elif isinstance(tool_result, list):
-                    tool_name = "unknown"
-                    parts = []
-                    for item in tool_result:
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            parts.append(item.get("text", ""))
-                        elif isinstance(item, str):
-                            parts.append(item)
-                    content = "\n".join(parts)
-                else:
-                    tool_name = "unknown"
-                    content = str(tool_result) if tool_result else ""
-
-                agent_logger.info(f"工具结果: {tool_name} | 输出长度: {len(content)}")
-                agent_logger.debug(f"工具结果详情: {tool_name} | {content[:1000]}")
-
-            # 方式2: message.content 中的 tool_result 块
-            elif isinstance(message, dict):
-                content_blocks = message.get("content", [])
-                if isinstance(content_blocks, list):
-                    for block in content_blocks:
-                        if not isinstance(block, dict):
-                            continue
-                        block_type = block.get("type", "")
-                        if block_type == "tool_result":
-                            tool_use_id = block.get("tool_use_id", "")
-                            # content 可能是字符串或列表
-                            raw_content = block.get("content", "")
-                            if isinstance(raw_content, list):
-                                # 提取 text 块拼接
-                                parts = []
-                                for item in raw_content:
-                                    if isinstance(item, dict) and item.get("type") == "text":
-                                        parts.append(item.get("text", ""))
-                                content = "\n".join(parts)
-                            else:
-                                content = str(raw_content)
-                            agent_logger.info(f"工具结果: tool_use_id={tool_use_id} | 输出长度: {len(content)}")
-                            agent_logger.debug(f"工具结果详情: {content[:1000]}")
-
-        # system 事件
-        elif event_type == "system":
-            if event_subtype == "init":
-                model = event.get("model", "unknown")
-                tools = event.get("tools", [])
-                tool_names = [t.get("name", "") if isinstance(t, dict) else str(t) for t in tools] if isinstance(tools, list) else []
-                agent_logger.info(f"会话初始化: model={model}, 可用工具={tool_names}")
-            elif event_subtype == "task_started":
-                desc = event.get("description", "")
-                agent_logger.info(f"子任务启动: {desc}")
-
-        elif event_type == "rate_limit_event":
-            rate_info = event.get("rate_limit_info", {})
-            agent_logger.warning(f"速率限制: {json.dumps(rate_info, ensure_ascii=False)[:300]}")
-
-        elif event_type == "result":
-            # 最终结果
-            agent_text = str(event.get("result", ""))
-            cost = event.get("cost_usd")
-            duration_ms = event.get("duration_ms")
-            if cost is not None:
-                agent_logger.info(f"API 费用: ${cost:.4f}")
-            if duration_ms is not None:
-                agent_logger.info(f"API 内部耗时: {duration_ms}ms")
-
-    if not agent_text:
-        # 兜底：如果 stream-json 没有 result 事件，尝试从最后一行提取
-        agent_logger.warning("未从 stream-json 中解析到 result 事件，尝试兜底解析")
-        try:
-            last_event = json.loads(raw_output.split("\n")[-1].strip())
-            agent_text = str(last_event.get("result", raw_output))
-        except json.JSONDecodeError:
-            agent_text = raw_output
-
-    print(f"[Agent] claude CLI 输出长度: {len(agent_text)}")
-
+    cli_duration = time.time() - t_prompt_ready
     agent_logger.info(f"模型输出长度: {len(agent_text)}")
     agent_logger.debug(f"模型输出内容:\n{agent_text}")
-    print(f"[Agent] 模型输出前200字符: {agent_text[:200]}")
 
-    # 6. 解析模型输出 → PageDiffResponse
+    # 8. 检测澄清请求（复用统一处理逻辑）
+    clarify_result = await _handle_clarification(agent_text, session_id)
+    if clarify_result is not None:
+        return clarify_result
+
+    # 9. 解析模型输出 → PageDiffResponse
     _progress("AI 分析完成，正在解析修改指令...")
     result = parse_agent_output(agent_text)
 
@@ -685,6 +718,4 @@ async def run_detailed_query(
     agent_logger.info(f"完成: 插入={len(result['insert_blocks'])}, 删除={len(result['delete_blocks'])}, "
                       f"CLI耗时={cli_duration:.2f}s, 总耗时={total_duration:.2f}s")
     agent_logger.info("=" * 60)
-
-    print(f"[Agent] 完成: 插入 {len(result['insert_blocks'])} 个, 删除 {len(result['delete_blocks'])} 个, 总耗时 {total_duration:.1f}s")
     return result

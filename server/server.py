@@ -1,4 +1,5 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from uuid import uuid4
 import sys
 import json
 import asyncio
@@ -97,6 +98,16 @@ class DetailedQueryRequest(BaseModel):
     page_path: str = Field(..., description="当前页面路径")
     block_ids: List[str] = Field(..., description="用户选中的 block ID 列表")
     user_query: str = Field(..., description="用户的查询指令")
+
+
+class ClarificationAnswerRequest(BaseModel):
+    """澄清回答请求模型"""
+    session_key: str = Field(..., description="SSE 返回的会话标识")
+    answer: str = Field(..., description="用户对澄清问题的回答")
+
+
+# 全局：等待用户回答的 Future 字典
+_pending_clarifications: Dict[str, asyncio.Future] = {}
 
 
 class InsertBlock(BaseModel):
@@ -433,15 +444,30 @@ async def detailed_query(
 
     通过 Server-Sent Events 实时推送进度，最后一个事件为完整结果。
     事件格式：
-    - progress 事件: {"type": "progress", "message": "..."}
-    - result   事件: {"type": "result",   "data": { ...PageDiffResponse 或 CreatePageResponse... }}
-    - error    事件: {"type": "error",    "message": "..."}
+    - progress      : {"type": "progress",      "message": "..."}
+    - clarification  : {"type": "clarification", "question": "...", "session_key": "..."}
+    - result         : {"type": "result",        "data": { ... }}
+    - error          : {"type": "error",         "message": "..."}
     """
     async def event_stream():
-        progress_queue: asyncio.Queue[str] = asyncio.Queue()
+        progress_queue: asyncio.Queue = asyncio.Queue()
 
         def on_progress(msg: str):
-            progress_queue.put_nowait(msg)
+            progress_queue.put_nowait(("progress", msg))
+
+        async def on_clarify(clarify_data: dict) -> str:
+            """当 Agent 需要澄清时调用：发送 SSE 事件（含选项），等待用户回答"""
+            session_key = str(uuid4())
+            future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+            _pending_clarifications[session_key] = future
+
+            # 通过 queue 通知 SSE 流发送 clarification 事件（含 options）
+            progress_queue.put_nowait(("clarification", clarify_data, session_key))
+
+            # 阻塞等待用户通过 /api/clarification_answer 提交回答
+            answer = await future
+            _pending_clarifications.pop(session_key, None)
+            return answer
 
         try:
             print(f"收到详细查询请求: page_path={request.page_path}, block_ids={request.block_ids}, user_query={request.user_query}")
@@ -454,20 +480,29 @@ async def detailed_query(
                 request.user_query,
                 wiki_root=wiki_root,
                 on_progress=on_progress,
+                on_clarify=on_clarify,
             ))
 
-            # Drain progress events while the agent is running
+            # Drain events while the agent is running
             while not task.done():
                 try:
-                    msg = await asyncio.wait_for(progress_queue.get(), timeout=0.3)
-                    yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+                    item = await asyncio.wait_for(progress_queue.get(), timeout=0.3)
                 except asyncio.TimeoutError:
                     continue
 
-            # Drain any remaining progress events
+                if isinstance(item, tuple) and item[0] == "clarification":
+                    _, clarify_data, session_key = item
+                    yield f"data: {json.dumps({'type': 'clarification', 'question': clarify_data['question'], 'options': clarify_data.get('options', []), 'session_key': session_key}, ensure_ascii=False)}\n\n"
+                elif isinstance(item, tuple) and item[0] == "progress":
+                    _, msg = item
+                    yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+
+            # Drain any remaining events
             while not progress_queue.empty():
-                msg = progress_queue.get_nowait()
-                yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
+                item = progress_queue.get_nowait()
+                if isinstance(item, tuple) and item[0] == "progress":
+                    _, msg = item
+                    yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
 
             result = task.result()
             print(f"详细查询结果: {result}")
@@ -497,6 +532,21 @@ async def detailed_query(
             yield f"data: {json.dumps({'type': 'error', 'message': f'详细查询失败: {str(e)}'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/clarification_answer")
+async def clarification_answer(request: ClarificationAnswerRequest):
+    """
+    用户回答澄清问题。
+
+    前端收到 SSE clarification 事件后，展示问题给用户，
+    用户回答后 POST 到此端点，Agent 将在同一会话中继续执行。
+    """
+    future = _pending_clarifications.get(request.session_key)
+    if not future:
+        raise HTTPException(status_code=404, detail="没有待回答的澄清问题，可能已超时或已回答")
+    future.set_result(request.answer)
+    return {"status": "ok", "message": "回答已提交，Agent 将继续执行"}
 
 
 @app.post("/api/apply_changes")

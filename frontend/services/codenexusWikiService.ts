@@ -200,7 +200,8 @@ class CodeNexusWikiService {
     pagePath: string,
     blockIds: string[],
     userQuery: string,
-    onProgress?: (message: string) => void
+    onProgress?: (message: string) => void,
+    onClarify?: (question: string, options: string[]) => Promise<string>
   ): Promise<ModifyPageResponse | NewPageResponse> {
     const request: DetailedQueryRequest = {
       page_path: pagePath,
@@ -255,6 +256,23 @@ class CodeNexusWikiService {
             if (event.type === 'progress') {
               console.log('[CodeNexus Service] 进度:', event.message);
               onProgress?.(event.message);
+            } else if (event.type === 'clarification') {
+              // Agent 需要澄清：展示问题给用户，等待回答后提交
+              console.log('[CodeNexus Service] 需要澄清:', event.question);
+              onProgress?.(`🤔 AI 提问: ${event.question}`);
+              if (onClarify) {
+                const answer = await onClarify(event.question, event.options || []);
+                // 将回答提交给后端，Agent 将在同一会话中继续
+                await fetch(`${this.baseUrl}/api/clarification_answer`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    session_key: event.session_key,
+                    answer: answer
+                  })
+                });
+                onProgress?.('已提交回答，AI 继续分析...');
+              }
             } else if (event.type === 'result') {
               const data = event.data;
               console.log('[CodeNexus Service] detailedQuery 结果:', data);

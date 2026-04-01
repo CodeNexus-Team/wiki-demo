@@ -1,4 +1,4 @@
-# Wiki Demo
+# Hole9Wiki
 
 基于 AI 的交互式代码仓库 Wiki 展示平台。
 
@@ -43,8 +43,13 @@
 ### 智能体依赖（交互式编辑功能）
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并完成认证
 - 验证安装：`claude --version`
+- 安装 MCP 和环境变量支持：
+  ```bash
+  pip install mcp python-dotenv
+  ```
 
 ### 可选依赖
+- Gemini API Key（前端 AI 分析功能，未配置时 CodeNexus 功能不受影响）
 - Neo4j 数据库（用于代码实体关系查询，未配置时自动跳过）
 
 ## 快速开始
@@ -194,9 +199,9 @@ frontend/public/source-code/
    ln -s /path/to/your/java-project frontend/public/source-code/my-project
    ```
 
-2. 修改 `server/agent.py` 中 `SYSTEM_PROMPT` 的源码路径：
-   ```
-   4. 对应源码在 /absolute/path/to/wiki-demo/frontend/public/source-code/my-project 中
+2. 设置环境变量 `SOURCE_ROOT_PATH` 或修改 `server/agent.py` 中的默认值：
+   ```bash
+   export SOURCE_ROOT_PATH=/absolute/path/to/wiki-demo/frontend/public/source-code/my-project
    ```
 
 > `.meta.json` 中 `source_id_list[].name` 的文件路径应与 `frontend/public/source-code/<项目名>/` 下的相对路径一致。例如 `name` 为 `mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`，则对应文件为 `frontend/public/source-code/mall/mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`。
@@ -205,11 +210,20 @@ frontend/public/source-code/
 
 在前端选中一个或多个 block 后输入修改指令，后端会：
 
-1. 提取选中 block 的内容和页面结构概览
-2. 调用 Claude Code CLI，模型自主决定是否需要读取源码
-3. 模型输出修改指令（replace / insert_after / delete）
-4. 前端展示 Diff 预览（红色原内容 / 绿色新内容）
-5. 用户确认后写入 JSON 文件
+1. 提取选中 block 的内容、页面结构概览、关联源码路径（含祖先链 neo4j 信息）
+2. 调用 Claude Code CLI（流式读取 stream-json 事件，实时推送进度）
+3. 如用户指令模糊，触发**澄清机制**：前端展示可点选的选项按钮，用户选择后在同一会话中继续
+4. 模型通过 Read/Grep 读取源码，输出修改指令（replace / insert_after / delete）
+5. 前端展示 Diff 预览（红色原内容 / 绿色新内容）
+6. 用户确认后写入 JSON 文件
+
+### 澄清机制
+
+当用户输入模糊指令（如"优化"、"调整"）时，Agent 会先提出澄清问题并给出可选方向：
+
+- 前端在输入框上方渲染选项按钮，用户一键选择
+- 最后一项固定为「其他」，支持自由输入
+- 选择后通过 `--resume` 在同一会话中继续，保留已读源码上下文
 
 ### 智能体日志
 
@@ -239,7 +253,8 @@ frontend/public/source-code/
 | `/api/scan_wikis` | GET | 扫描目录返回所有页面路径 |
 | `/api/fetch_page?page_path=xxx` | POST | 获取单个 Wiki 页面内容 |
 | `/api/user_query` | POST | 扩展查询 / 执行工作流 |
-| `/api/detailed_query` | POST | 智能体交互式修改（选中 block + 用户指令） |
+| `/api/detailed_query` | POST | 智能体交互式修改（SSE 流式响应，支持 progress/clarification/result/error 事件） |
+| `/api/clarification_answer` | POST | 用户回答澄清问题（配合 detailed_query 的 clarification 事件） |
 | `/api/apply_changes` | POST | 确认并应用变更到 JSON 文件 |
 
 ## 目录结构
@@ -252,8 +267,10 @@ wiki-demo/
 ├── clear.py                # JSON 文件清理工具
 ├── server/
 │   ├── server.py           # FastAPI 后端主程序
-│   ├── agent.py            # Claude 智能体（交互式编辑）
+│   ├── agent.py            # Claude 智能体（交互式编辑 + 澄清机制）
+│   ├── neo4j_mcp_server.py # Neo4j MCP Server（知识图谱查询）
 │   ├── backend_mock.py     # Mock 实现
+│   ├── .env                # 环境变量配置（Neo4j 连接等）
 │   └── logs/
 │       └── agent.log       # 智能体调用日志
 ├── frontend/
@@ -294,10 +311,19 @@ python clear.py /path/to/wiki-data/wiki_result -f
 - 后端端口：编辑 `demo.py`，修改 `port=11219`
 - 前端端口：编辑 `frontend/vite.config.ts`，添加 `server: { port: 3001 }`
 
+### Gemini API 未配置
+- 不影响 CodeNexus 功能使用，仅前端 Gemini 分析功能不可用
+- 如需使用，在 `frontend/.env.local` 中设置 `GEMINI_API_KEY` 后重启前端
+
 ### 智能体调用失败
 - 确认 Claude Code CLI 已安装：`claude --version`
 - 检查日志：`server/logs/agent.log`
 - 如果使用第三方中转，在 `agent.py` 中配置 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`
+- 确认 MCP 依赖已安装：`pip install mcp`
+
+### Neo4j 查询失败
+- 检查 `server/.env` 中的连接信息（`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`）
+- 未配置时智能体会自动跳过图谱查询，改用 Read/Grep 读取源码
 
 ### 转换失败
 - 确认 `markdown_parser.py` 存在
