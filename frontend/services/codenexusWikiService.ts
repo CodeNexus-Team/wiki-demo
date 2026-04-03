@@ -202,7 +202,7 @@ class CodeNexusWikiService {
     blockIds: string[],
     userQuery: string,
     onProgress?: (message: string) => void,
-    onClarify?: (question: string, options: string[]) => Promise<string>,
+    onClarify?: (question: string, options: string[], multiSelect?: boolean) => Promise<string>,
     resumeSessionId?: string
   ): Promise<(ModifyPageResponse | NewPageResponse | QaAnswerResponse) & { session_id?: string }> {
     const request: DetailedQueryRequest = {
@@ -264,7 +264,7 @@ class CodeNexusWikiService {
               console.log('[CodeNexus Service] 需要澄清:', event.question);
               onProgress?.(`🤔 AI 提问: ${event.question}`);
               if (onClarify) {
-                const answer = await onClarify(event.question, event.options || []);
+                const answer = await onClarify(event.question, event.options || [], event.multi_select || false);
                 // 将回答提交给后端，Agent 将在同一会话中继续
                 await fetch(`${this.baseUrl}/api/clarification_answer`, {
                   method: 'POST',

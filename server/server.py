@@ -573,7 +573,7 @@ async def detailed_query(
 
                 if isinstance(item, tuple) and item[0] == "clarification":
                     _, clarify_data, session_key = item
-                    yield f"data: {json.dumps({'type': 'clarification', 'question': clarify_data['question'], 'options': clarify_data.get('options', []), 'session_key': session_key}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'clarification', 'question': clarify_data['question'], 'options': clarify_data.get('options', []), 'multi_select': clarify_data.get('multi_select', False), 'session_key': session_key}, ensure_ascii=False)}\n\n"
                 elif isinstance(item, tuple) and item[0] == "progress":
                     _, msg = item
                     yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"

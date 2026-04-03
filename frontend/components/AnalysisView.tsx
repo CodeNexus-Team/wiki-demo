@@ -585,11 +585,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             blockIds,
             currentPrompt,
             (msg) => updateAssistantProgress(assistantMsgId, msg),
-            async (question, options) => {
+            async (question, options, multiSelect) => {
               // Agent 需要澄清：在聊天气泡中展示问题和可选项
               setChatHistory(prev => prev.map(msg =>
                 msg.id === assistantMsgId
-                  ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options }
+                  ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options, clarificationMultiSelect: multiSelect }
                   : msg
               ));
 
@@ -679,11 +679,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
               [],
               currentPrompt,
               (msg) => updateAssistantProgress(assistantMsgId, msg),
-              async (question, options) => {
+              async (question, options, multiSelect) => {
                 // 追问中触发澄清：复用同一聊天气泡展示选项
                 setChatHistory(prev => prev.map(msg =>
                   msg.id === assistantMsgId
-                    ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options }
+                    ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options, clarificationMultiSelect: multiSelect }
                     : msg
                 ));
                 return new Promise<string>((resolve) => {
@@ -962,14 +962,6 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 isLoading={isLoading}
                 variant="blue"
                 onClarificationSelect={msg.clarificationOptions && clarificationResolverRef.current ? (opt) => {
-                  const isOther = opt.includes('其他');
-                  if (isOther) {
-                    // "其他"选项：清除选项按钮，让用户自由输入
-                    setChatHistory(prev => prev.map(m =>
-                      m.id === msg.id ? { ...m, clarificationOptions: undefined } : m
-                    ));
-                    return;
-                  }
                   const resolver = clarificationResolverRef.current;
                   if (resolver) {
                     clarificationResolverRef.current = null;
@@ -978,6 +970,18 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                     ));
                     addUserMessage(opt);
                     resolver(opt);
+                  }
+                } : undefined}
+                onClarificationMultiSubmit={msg.clarificationMultiSelect && clarificationResolverRef.current ? (opts) => {
+                  const resolver = clarificationResolverRef.current;
+                  if (resolver) {
+                    clarificationResolverRef.current = null;
+                    const joined = opts.join('、');
+                    setChatHistory(prev => prev.map(m =>
+                      m.id === msg.id ? { ...m, clarificationOptions: undefined } : m
+                    ));
+                    addUserMessage(joined);
+                    resolver(joined);
                   }
                 } : undefined}
               />
@@ -1026,7 +1030,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 isDarkMode ? 'text-[#e6edf3] placeholder:text-[#7d8590]/50' : 'text-[#1d1d1f] placeholder:text-[#86868b]/50'
               }`}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
                   handleAnalyze();
                 }

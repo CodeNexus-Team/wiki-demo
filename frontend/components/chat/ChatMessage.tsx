@@ -12,14 +12,20 @@ interface ChatMessageProps {
   isLoading?: boolean;
   variant?: 'blue' | 'orange';
   onClarificationSelect?: (option: string) => void;
+  onClarificationMultiSubmit?: (options: string[]) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
   isLoading = false,
   variant = 'blue',
-  onClarificationSelect
+  onClarificationSelect,
+  onClarificationMultiSubmit
 }) => {
+  const [multiSelected, setMultiSelected] = React.useState<Set<string>>(new Set());
+  const [showCustomInput, setShowCustomInput] = React.useState(false);
+  const [customText, setCustomText] = React.useState('');
+  const customInputRef = React.useRef<HTMLInputElement>(null);
   const isUser = message.role === 'user';
   const isFinished = !!message.content && message.content.length > 0 && !isLoading;
 
@@ -113,23 +119,85 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
             {/* Clarification Options */}
             {!isUser && message.clarificationOptions && message.clarificationOptions.length > 0 && onClarificationSelect && (
-              <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-[#e5e5ea]/60">
-                {message.clarificationOptions.map((opt, i) => {
-                  const isOther = opt.includes('其他');
+              <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-[#e5e5ea]/60">
+                {message.clarificationOptions.filter(opt => !opt.includes('其他')).map((opt, i) => {
+                  const isChecked = multiSelected.has(opt);
                   return (
                     <button
                       key={i}
-                      onClick={() => onClarificationSelect(opt)}
-                      className={`px-3 py-1.5 rounded-lg text-xs transition-all ${
-                        isOther
-                          ? 'border border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-600'
+                      onClick={() => {
+                        if (message.clarificationMultiSelect) {
+                          setMultiSelected(prev => {
+                            const next = new Set(prev);
+                            next.has(opt) ? next.delete(opt) : next.add(opt);
+                            return next;
+                          });
+                        } else {
+                          onClarificationSelect(opt);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs transition-all text-left ${
+                        isChecked
+                          ? 'bg-[#dbe8ff] text-[#0071E3] border border-[#0071E3] ring-1 ring-[#0071E3]/30'
                           : 'bg-[#f0f5ff] text-[#0071E3] hover:bg-[#dbe8ff] border border-[#c5d9f5]'
                       }`}
                     >
+                      {message.clarificationMultiSelect && <span className="mr-1.5">{isChecked ? '☑' : '☐'}</span>}
                       {opt}
                     </button>
                   );
                 })}
+                {/* 自定义输入：展开/收起，输入内容与选项共存 */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      setShowCustomInput(!showCustomInput);
+                      if (!showCustomInput) {
+                        setTimeout(() => customInputRef.current?.focus(), 50);
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs transition-all text-left border border-dashed ${
+                      showCustomInput || customText
+                        ? 'border-blue-400 text-blue-600 bg-blue-50/50'
+                        : 'border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-600'
+                    }`}
+                  >
+                    {message.clarificationMultiSelect && <span className="mr-1.5">{customText ? '☑' : '☐'}</span>}
+                    其他
+                  </button>
+                  {showCustomInput && (
+                    <input
+                      ref={customInputRef}
+                      value={customText}
+                      onChange={(e) => setCustomText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && customText.trim()) {
+                          if (!message.clarificationMultiSelect) {
+                            onClarificationSelect(customText.trim());
+                          }
+                        }
+                      }}
+                      placeholder="请输入..."
+                      className="flex-1 px-2 py-1 rounded-lg text-xs border border-gray-200 outline-none focus:border-[#0071E3] bg-white"
+                    />
+                  )}
+                </div>
+                {/* 确认按钮：有选中项或有自定义输入时显示 */}
+                {message.clarificationMultiSelect && (multiSelected.size > 0 || customText.trim()) && (
+                  <button
+                    onClick={() => {
+                      const selected = Array.from(multiSelected);
+                      if (customText.trim()) selected.push(customText.trim());
+                      onClarificationMultiSubmit?.(selected);
+                      setMultiSelected(new Set());
+                      setCustomText('');
+                      setShowCustomInput(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs bg-[#0071E3] text-white hover:bg-[#005bb5] transition-all mt-1"
+                  >
+                    确认选择 ({multiSelected.size + (customText.trim() ? 1 : 0)})
+                  </button>
+                )}
               </div>
             )}
           </div>

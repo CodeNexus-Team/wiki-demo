@@ -5,48 +5,81 @@ import mermaid from 'mermaid';
 import { Code, ExternalLink, Database } from 'lucide-react';
 import { MermaidMetadata, Neo4jIdMapping } from '../types';
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'base',
-  securityLevel: 'loose',
-  suppressErrorRendering: true,
-  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
-  themeVariables: {
-    primaryColor: '#ffffff',
-    primaryTextColor: '#1d1d1f',
-    primaryBorderColor: '#d1d1d6',
-    lineColor: '#86868b',
-    secondaryColor: '#F5F5F7',
-    tertiaryColor: '#ffffff',
-    nodeBorder: '#d1d1d6',
-    clusterBkg: '#F9F9F9',
-    clusterBorder: '#e5e5ea',
-    defaultLinkColor: '#86868b',
-    titleColor: '#1d1d1f',
-    edgeLabelBackground: '#ffffff',
-    actorBkg: '#ffffff',
-    actorBorder: '#d1d1d6',
-    labelBoxBkgColor: '#ffffff',
-    labelBoxBorderColor: '#d1d1d6',
-    signalColor: '#86868b',
-    signalTextColor: '#1d1d1f',
-    loopTextColor: '#1d1d1f',
-    mainBkg: '#ffffff',
-    fontSize: '14px',
+const MERMAID_LIGHT_THEME = {
+  primaryColor: '#ffffff',
+  primaryTextColor: '#1d1d1f',
+  primaryBorderColor: '#d1d1d6',
+  lineColor: '#86868b',
+  secondaryColor: '#F5F5F7',
+  tertiaryColor: '#ffffff',
+  nodeBorder: '#d1d1d6',
+  clusterBkg: '#F9F9F9',
+  clusterBorder: '#e5e5ea',
+  defaultLinkColor: '#86868b',
+  titleColor: '#1d1d1f',
+  edgeLabelBackground: '#ffffff',
+  actorBkg: '#ffffff',
+  actorBorder: '#d1d1d6',
+  labelBoxBkgColor: '#ffffff',
+  labelBoxBorderColor: '#d1d1d6',
+  signalColor: '#86868b',
+  signalTextColor: '#1d1d1f',
+  loopTextColor: '#1d1d1f',
+  mainBkg: '#ffffff',
+  fontSize: '14px',
+};
+
+const MERMAID_DARK_THEME = {
+  primaryColor: '#21262d',
+  primaryTextColor: '#e6edf3',
+  primaryBorderColor: '#30363d',
+  lineColor: '#7d8590',
+  secondaryColor: '#161b22',
+  tertiaryColor: '#21262d',
+  nodeBorder: '#30363d',
+  clusterBkg: '#161b22',
+  clusterBorder: '#30363d',
+  defaultLinkColor: '#7d8590',
+  titleColor: '#e6edf3',
+  edgeLabelBackground: '#0d1117',
+  actorBkg: '#21262d',
+  actorBorder: '#30363d',
+  labelBoxBkgColor: '#21262d',
+  labelBoxBorderColor: '#30363d',
+  signalColor: '#7d8590',
+  signalTextColor: '#e6edf3',
+  loopTextColor: '#e6edf3',
+  mainBkg: '#21262d',
+  fontSize: '14px',
+};
+
+const MERMAID_FLOWCHART_CONFIG = {
+  curve: 'basis' as const,
+  padding: 30,
+  nodeSpacing: 50,
+  rankSpacing: 60,
+  htmlLabels: true,
+  subGraphTitleMargin: {
+    top: 10,
+    bottom: 10,
   },
-  flowchart: {
-    curve: 'basis',
-    padding: 30,
-    nodeSpacing: 50,
-    rankSpacing: 60,
-    htmlLabels: true,
-    subGraphTitleMargin: {
-      top: 10,
-      bottom: 10,
-    },
-    titleTopMargin: 25,
-  }
-});
+  titleTopMargin: 25,
+};
+
+function initMermaid(isDark: boolean) {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'base',
+    securityLevel: 'loose',
+    suppressErrorRendering: true,
+    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
+    themeVariables: isDark ? MERMAID_DARK_THEME : MERMAID_LIGHT_THEME,
+    flowchart: MERMAID_FLOWCHART_CONFIG,
+  });
+}
+
+// 默认初始化为亮色
+initMermaid(false);
 
 /**
  * 检测 Mermaid 图表类型
@@ -192,9 +225,10 @@ interface MermaidProps {
   highlightedNodeId?: string | null;
   onDoubleClick?: () => void;
   status?: 'inserted' | 'deleted' | 'modified' | 'original';
+  isDarkMode?: boolean;
 }
 
-const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSource, onNodeClick, highlightedNodeId, onDoubleClick, status }) => {
+const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSource, onNodeClick, highlightedNodeId, onDoubleClick, status, isDarkMode = false }) => {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ type: string; message: string } | null>(null);
@@ -210,6 +244,10 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
 
     const renderChart = async () => {
       if (!chart) return;
+
+      // 切换主题时重新初始化 mermaid
+      initMermaid(isDarkMode);
+
       let cleanChart = chart.replace(/```mermaid/g, '').replace(/```/g, '').trim();
       const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -245,7 +283,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
 
     renderChart();
     return () => { isMounted = false; };
-  }, [chart]);
+  }, [chart, isDarkMode]);
 
   // Add event listeners for interaction
   useEffect(() => {
@@ -380,8 +418,67 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
         rect.setAttribute('y', String(currentY - 20));
         rect.setAttribute('height', String(currentHeight + 20));
       });
+
+      // 暗色模式：只转换白色/浅色背景和深色文字，保留其他颜色不变
+      if (isDarkMode) {
+        // 白色/近白色填充 → 暗灰（只处理这些）
+        const whiteFills = new Set(['#ffffff', '#fff', 'white', 'rgb(255, 255, 255)',
+                                     '#f9f9f9', '#f5f5f7', '#fafafa']);
+
+        const allStyled = svgElement.querySelectorAll('[style]');
+        allStyled.forEach(el => {
+          const style = (el as HTMLElement).style;
+          const fill = style.fill?.toLowerCase();
+          if (fill && whiteFills.has(fill)) {
+            style.fill = '#21262d';
+          }
+        });
+
+        // 深色文字 → 浅色
+        const darkTexts = new Set(['#1d1d1f', '#333', '#333333', '#000', '#000000',
+                                    'rgb(0, 0, 0)', 'rgb(29, 29, 31)']);
+        svgElement.querySelectorAll('text, .nodeLabel, .edgeLabel, .label').forEach(el => {
+          const style = (el as HTMLElement).style;
+          const color = style.fill?.toLowerCase() || style.color?.toLowerCase();
+          if (color && darkTexts.has(color)) {
+            style.fill = '#e6edf3';
+            style.color = '#e6edf3';
+          }
+          if (!style.fill || style.fill === '' || style.fill === 'rgb(0, 0, 0)') {
+            style.fill = '#e6edf3';
+          }
+        });
+
+        // 深色描边 → 浅灰（仅白色节点的边框）
+        const darkStrokes = new Set(['#333', '#333333', '#000', '#000000']);
+        allStyled.forEach(el => {
+          const style = (el as HTMLElement).style;
+          const stroke = style.stroke?.toLowerCase();
+          if (stroke && darkStrokes.has(stroke)) {
+            style.stroke = '#7d8590';
+          }
+        });
+
+        // subgraph 背景
+        svgElement.querySelectorAll('.cluster rect').forEach(rect => {
+          const style = (rect as HTMLElement).style;
+          const fill = style.fill?.toLowerCase();
+          if (!fill || whiteFills.has(fill)) {
+            style.fill = '#161b22';
+          }
+          style.stroke = '#30363d';
+        });
+
+        // edgeLabel 背景
+        svgElement.querySelectorAll('.edgeLabel rect, .labelBkg').forEach(el => {
+          const fill = (el as HTMLElement).style.fill?.toLowerCase();
+          if (!fill || whiteFills.has(fill)) {
+            (el as HTMLElement).style.fill = '#0d1117';
+          }
+        });
+      }
     }
-  }, [svg]);
+  }, [svg, isDarkMode]);
 
   // 高亮节点 - SVG 渲染后通过 DOM 操作
   useEffect(() => {
@@ -443,15 +540,15 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
 
   if (error) {
     return (
-      <div className="p-4 bg-red-50 rounded-xl border border-red-200">
+      <div className={`p-4 rounded-xl border ${isDarkMode ? 'bg-red-900/20 border-red-800/50' : 'bg-red-50 border-red-200'}`}>
         <div className="flex items-start gap-3">
-          <div className="flex-shrink-0 w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
-            <span className="text-red-600 text-lg">⚠</span>
+          <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isDarkMode ? 'bg-red-900/40' : 'bg-red-100'}`}>
+            <span className={isDarkMode ? 'text-red-400 text-lg' : 'text-red-600 text-lg'}>⚠</span>
           </div>
           <div className="flex-1">
-            <h4 className="text-sm font-semibold text-red-800 mb-1">{error}</h4>
+            <h4 className={`text-sm font-semibold mb-1 ${isDarkMode ? 'text-red-400' : 'text-red-800'}`}>{error}</h4>
             {errorDetails && (
-              <div className="text-xs text-red-600 space-y-1">
+              <div className={`text-xs space-y-1 ${isDarkMode ? 'text-red-400/80' : 'text-red-600'}`}>
                 <p><strong>图表类型:</strong> {errorDetails.type}</p>
                 <p className="text-red-500 font-mono text-[11px] bg-red-100/50 p-2 rounded mt-2 break-all">
                   {errorDetails.message}
@@ -499,7 +596,9 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
           )}
           <div
               ref={containerRef}
-              className={`mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 rounded-xl shadow-sm cursor-default ${getStatusStyles()}`}
+              className={`mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 rounded-xl shadow-sm cursor-default ${getStatusStyles()} ${
+                isDarkMode ? 'bg-[#0d1117] border border-[#30363d]' : 'bg-white'
+              }`}
               onClick={() => setMenuPosition(null)}
               onDoubleClick={onDoubleClick}
           />
@@ -508,11 +607,17 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
         {/* Context Menu - Rendered via Portal to avoid transform scaling */}
         {menuPosition && activeNodeId && createPortal(
             <div
-                className="fixed z-[9999] bg-white/80 backdrop-blur-xl rounded-lg shadow-apple-hover border border-gray-100 w-48 overflow-hidden animate-in fade-in zoom-in-95 duration-100 select-none"
+                className={`fixed z-[9999] backdrop-blur-xl rounded-lg shadow-apple-hover w-48 overflow-hidden animate-in fade-in zoom-in-95 duration-100 select-none ${
+                  isDarkMode
+                    ? 'bg-[#161b22]/90 border border-[#30363d]'
+                    : 'bg-white/80 border border-gray-100'
+                }`}
                 style={{ top: menuPosition.y, left: menuPosition.x }}
                 onClick={(e) => e.stopPropagation()}
             >
-                <div className="px-3 py-2 bg-gray-50/50 border-b border-gray-100 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                <div className={`px-3 py-2 border-b text-[10px] font-semibold uppercase tracking-wider ${
+                  isDarkMode ? 'bg-[#21262d]/50 border-[#30363d] text-[#7d8590]' : 'bg-gray-50/50 border-gray-100 text-gray-500'
+                }`}>
                     Node Actions
                 </div>
                 {metadata?.sourceMapping?.[activeNodeId] && (
@@ -523,21 +628,29 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
                             }
                             setMenuPosition(null);
                         }}
-                        className="w-full text-left px-3 py-2.5 text-xs text-[#1d1d1f] hover:bg-[#0071E3] hover:text-white transition-colors flex items-center gap-2"
+                        className={`w-full text-left px-3 py-2.5 text-xs hover:bg-[#0071E3] hover:text-white transition-colors flex items-center gap-2 ${
+                          isDarkMode ? 'text-[#e6edf3]' : 'text-[#1d1d1f]'
+                        }`}
                     >
                         <Code size={14} />
                         定位源代码位置
                     </button>
                 )}
-                <button className="w-full text-left px-3 py-2.5 text-xs text-[#1d1d1f] hover:bg-gray-100/50 transition-colors flex items-center gap-2 opacity-50 cursor-not-allowed">
+                <button className={`w-full text-left px-3 py-2.5 text-xs transition-colors flex items-center gap-2 opacity-50 cursor-not-allowed ${
+                  isDarkMode ? 'text-[#e6edf3] hover:bg-[#30363d]' : 'text-[#1d1d1f] hover:bg-gray-100/50'
+                }`}>
                     <ExternalLink size={14} />
                     查看相关文档
                 </button>
                 {neo4jSource?.[activeNodeId] && (
-                    <div className="px-3 py-2.5 text-xs text-[#1d1d1f] border-t border-gray-100 flex items-center gap-2 bg-blue-50/50">
-                        <Database size={14} className="text-blue-600" />
-                        <span className="text-gray-500">Neo4j Source:</span>
-                        <span className="font-mono text-blue-600">{Array.isArray(neo4jSource[activeNodeId]) ? (neo4jSource[activeNodeId] as string[]).join(', ') : neo4jSource[activeNodeId]}</span>
+                    <div className={`px-3 py-2.5 text-xs border-t flex items-center gap-2 ${
+                      isDarkMode
+                        ? 'text-[#e6edf3] border-[#30363d] bg-[#58a6ff]/10'
+                        : 'text-[#1d1d1f] border-gray-100 bg-blue-50/50'
+                    }`}>
+                        <Database size={14} className={isDarkMode ? 'text-[#58a6ff]' : 'text-blue-600'} />
+                        <span className={isDarkMode ? 'text-[#7d8590]' : 'text-gray-500'}>Neo4j Source:</span>
+                        <span className={`font-mono ${isDarkMode ? 'text-[#58a6ff]' : 'text-blue-600'}`}>{Array.isArray(neo4jSource[activeNodeId]) ? (neo4jSource[activeNodeId] as string[]).join(', ') : neo4jSource[activeNodeId]}</span>
                     </div>
                 )}
             </div>,

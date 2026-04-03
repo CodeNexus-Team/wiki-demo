@@ -344,6 +344,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                   highlightedNodeId={effectiveHighlightedNodeId}
                   onDoubleClick={handleOpenMermaidEditor}
                   status={block.status}
+                  isDarkMode={isDarkMode}
               />
             </div>
             {/* Mermaid 编辑模态框 */}

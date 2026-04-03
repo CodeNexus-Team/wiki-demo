@@ -95,6 +95,7 @@ export interface ChatMessage {
   steps?: string[]; // Streaming thought steps (e.g. "Parsing...", "Generating...")
   references?: WikiBlock[]; // Context blocks referenced by the user
   clarificationOptions?: string[]; // Options for clarification questions
+  clarificationMultiSelect?: boolean; // Whether multiple options can be selected
   timestamp: number;
 }
 
