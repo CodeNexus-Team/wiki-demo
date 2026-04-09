@@ -430,9 +430,14 @@ class CodeNexusWikiService {
   async qaQuery(
     pagePath: string,
     userQuery: string,
-    onProgress?: (message: string) => void
-  ): Promise<string> {
-    const request = { page_path: pagePath, user_query: userQuery };
+    onProgress?: (message: string) => void,
+    onClarify?: (question: string, options: string[], multiSelect?: boolean) => Promise<string>,
+    resumeSessionId?: string
+  ): Promise<{ answer: string; session_id?: string }> {
+    const request: Record<string, unknown> = { page_path: pagePath, user_query: userQuery };
+    if (resumeSessionId) {
+      request.resume_session_id = resumeSessionId;
+    }
 
     try {
       const response = await fetch(`${this.baseUrl}/api/qa_query`, {
@@ -451,6 +456,7 @@ class CodeNexusWikiService {
       const decoder = new TextDecoder();
       let buffer = '';
       let answer = '';
+      let sessionId: string | undefined;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -469,8 +475,24 @@ class CodeNexusWikiService {
             const event = JSON.parse(payload);
             if (event.type === 'progress') {
               onProgress?.(event.message);
+            } else if (event.type === 'clarification') {
+              console.log('[CodeNexus Service] QA 需要澄清:', event.question);
+              onProgress?.(`🤔 AI 提问: ${event.question}`);
+              if (onClarify) {
+                const clarifyAnswer = await onClarify(event.question, event.options || [], event.multi_select || false);
+                await fetch(`${this.baseUrl}/api/clarification_answer`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    session_key: event.session_key,
+                    answer: clarifyAnswer
+                  })
+                });
+                onProgress?.('已提交回答，AI 继续分析...');
+              }
             } else if (event.type === 'result') {
               answer = event.answer;
+              sessionId = event.session_id;
             } else if (event.type === 'error') {
               throw new Error(event.message);
             }
@@ -481,11 +503,22 @@ class CodeNexusWikiService {
       }
 
       if (!answer) throw new Error('未收到回答');
-      return answer;
+      return { answer, session_id: sessionId };
     } catch (error) {
       console.error('问答查询失败:', error);
       throw new Error(`问答查询失败: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /**
+   * 清理 Claude CLI session 的本地存储文件（fire-and-forget）
+   */
+  cleanupSession(sessionId: string): void {
+    fetch(`${this.baseUrl}/api/cleanup_session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId })
+    }).catch(err => console.warn('Session 清理失败（不影响功能）:', err));
   }
 
   /**

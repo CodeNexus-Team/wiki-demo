@@ -27,6 +27,7 @@ const App: React.FC = () => {
       setCurrentView(AnalysisType.ARCHITECTURE);
     }
     setIsHistoryPanelOpen(false);
+    setIsSidebarCollapsed(true);
   };
 
   const handleDeleteHistory = (id: string) => {
@@ -41,6 +42,7 @@ const App: React.FC = () => {
   // WikiBrowser 中点击 wiki 文件 → 传入初始数据，走和 workflow 完成后一样的加载流程
   const handleOpenWikiPage = useCallback((pagePath: string, allPages: string[]) => {
     setWikiBrowserInitData({ pagePath, wikiPages: allPages });
+    setIsSidebarCollapsed(true);
   }, []);
 
   // 从 wiki 查看返回到列表

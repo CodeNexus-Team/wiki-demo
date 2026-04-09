@@ -23,7 +23,7 @@ from backend_mock import (
     detailed_query_mock,
     expand_query_mock
 )
-from agent import run_detailed_query, run_qa_query
+from agent import run_detailed_query, run_qa_query, cleanup_session
 
 # 导入实际的 expand_query 实现
 #from fy.intent_understand.expand_query import expand_user_query
@@ -105,6 +105,7 @@ class QaQueryRequest(BaseModel):
     """自由问答请求模型"""
     page_path: str = Field(..., description="当前页面路径")
     user_query: str = Field(..., description="用户的问题")
+    resume_session_id: Optional[str] = Field(None, description="恢复之前会话的 session_id（追问时使用）")
 
 
 class ClarificationAnswerRequest(BaseModel):
@@ -630,6 +631,24 @@ async def clarification_answer(request: ClarificationAnswerRequest):
     return {"status": "ok", "message": "回答已提交，Agent 将继续执行"}
 
 
+class CleanupSessionRequest(BaseModel):
+    """清理会话请求模型"""
+    session_id: str = Field(..., description="要清理的 Claude CLI session ID")
+
+
+@app.post("/api/cleanup_session")
+async def cleanup_session_api(request: CleanupSessionRequest):
+    """
+    清理 Claude CLI session 的本地存储文件。
+    仅允许清理本 agent 创建的 session，防止误删其他会话。
+    """
+    try:
+        result = cleanup_session(request.session_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理 session 失败: {str(e)}")
+
+
 @app.post("/api/qa_query")
 async def qa_query(request: QaQueryRequest):
     """
@@ -646,6 +665,18 @@ async def qa_query(request: QaQueryRequest):
         def on_progress(msg: str):
             progress_queue.put_nowait(("progress", msg))
 
+        async def on_clarify(clarify_data: dict) -> str:
+            """当 Agent 需要澄清时调用：发送 SSE 事件，等待用户回答"""
+            session_key = str(uuid4())
+            future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+            _pending_clarifications[session_key] = future
+
+            progress_queue.put_nowait(("clarification", clarify_data, session_key))
+
+            answer = await future
+            _pending_clarifications.pop(session_key, None)
+            return answer
+
         try:
             wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
 
@@ -654,6 +685,8 @@ async def qa_query(request: QaQueryRequest):
                 request.user_query,
                 wiki_root=wiki_root,
                 on_progress=on_progress,
+                on_clarify=on_clarify,
+                resume_session_id=request.resume_session_id,
             ))
 
             while not task.done():
@@ -661,7 +694,10 @@ async def qa_query(request: QaQueryRequest):
                     item = await asyncio.wait_for(progress_queue.get(), timeout=0.3)
                 except asyncio.TimeoutError:
                     continue
-                if isinstance(item, tuple) and item[0] == "progress":
+                if isinstance(item, tuple) and item[0] == "clarification":
+                    _, clarify_data, session_key = item
+                    yield f"data: {json.dumps({'type': 'clarification', 'question': clarify_data['question'], 'options': clarify_data.get('options', []), 'multi_select': clarify_data.get('multi_select', False), 'session_key': session_key}, ensure_ascii=False)}\n\n"
+                elif isinstance(item, tuple) and item[0] == "progress":
                     _, msg = item
                     yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
 
@@ -672,8 +708,8 @@ async def qa_query(request: QaQueryRequest):
                     _, msg = item
                     yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
 
-            answer = task.result()
-            yield f"data: {json.dumps({'type': 'result', 'answer': answer}, ensure_ascii=False)}\n\n"
+            qa_result = task.result()
+            yield f"data: {json.dumps({'type': 'result', 'answer': qa_result['answer'], 'session_id': qa_result.get('session_id')}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': f'问答失败: {str(e)}'}, ensure_ascii=False)}\n\n"

@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, FileCode, ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { ghcolors } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { SourceLocation } from '../types';
 import { MOCK_REPO_FILES } from '../mock/sourceCode';
 
@@ -114,6 +115,7 @@ interface SourceCodePanelProps {
   location: SourceLocation | null;
   panelWidth: number;
   onWidthChange: (width: number) => void;
+  isDarkMode?: boolean;
 }
 
 // 构建文件树
@@ -151,7 +153,7 @@ const buildFileTree = (files: string[]): FileTreeNode[] => {
   return root;
 };
 
-const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, location, panelWidth, onWidthChange }) => {
+const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, location, panelWidth, onWidthChange, isDarkMode = false }) => {
   const codeRef = useRef<HTMLDivElement>(null);
   const [fileContent, setFileContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -374,8 +376,8 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
     }
   }, [isOpen, highlightLine, displayFile]);
 
-  // 渲染文件树节点
-  const renderTreeNode = (node: FileTreeNode, depth: number = 0): React.ReactNode => {
+  // 渲染文件树节点（不缩进，扁平展示）
+  const renderTreeNode = (node: FileTreeNode): React.ReactNode => {
     const isExpanded = expandedFolders.has(node.path);
     const isSelected = node.path === displayFile;
 
@@ -383,15 +385,19 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
       return (
         <div key={node.path}>
           <div
-            className="flex items-center gap-1 px-2 py-1 hover:bg-[#2a2d2e] cursor-pointer text-gray-300 text-xs"
-            style={{ paddingLeft: `${depth * 12 + 8}px` }}
+            className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${
+              isDarkMode ? 'hover:bg-[#2a2d2e] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+            }`}
             onClick={() => toggleFolder(node.path)}
           >
             {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            {isExpanded ? <FolderOpen size={14} className="text-[#dcb67a]" /> : <Folder size={14} className="text-[#dcb67a]" />}
+            {isExpanded
+              ? <FolderOpen size={14} className={isDarkMode ? 'text-[#dcb67a]' : 'text-amber-500'} />
+              : <Folder size={14} className={isDarkMode ? 'text-[#dcb67a]' : 'text-amber-500'} />
+            }
             <span className="truncate">{node.name}</span>
           </div>
-          {isExpanded && node.children?.map(child => renderTreeNode(child, depth + 1))}
+          {isExpanded && node.children?.map(child => renderTreeNode(child))}
         </div>
       );
     }
@@ -399,11 +405,14 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
     return (
       <div
         key={node.path}
-        className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${isSelected ? 'bg-[#094771] text-white' : 'hover:bg-[#2a2d2e] text-gray-300'}`}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${
+          isSelected
+            ? isDarkMode ? 'bg-[#094771] text-white' : 'bg-[#0071E3]/10 text-[#0071E3]'
+            : isDarkMode ? 'hover:bg-[#2a2d2e] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+        }`}
         onClick={() => selectFile(node.path)}
       >
-        <FileCode size={14} className="text-[#519aba] flex-shrink-0" />
+        <FileCode size={14} className={`flex-shrink-0 ${isDarkMode ? 'text-[#519aba]' : 'text-[#0071E3]'}`} />
         <span className="truncate">{node.name}</span>
       </div>
     );
@@ -412,8 +421,12 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
   return (
     <div
       className={`
-        source-code-panel fixed top-0 right-0 h-full bg-[#1e1e1e]/90 backdrop-blur-xl shadow-2xl transform transition-transform duration-300 ease-out z-[100] border-l border-[#333] flex flex-col
+        source-code-panel fixed top-0 right-0 h-full backdrop-blur-xl shadow-2xl transform transition-transform duration-300 ease-out z-[100] border-l flex flex-col
         ${isOpen ? 'translate-x-0' : 'translate-x-full'}
+        ${isDarkMode
+          ? 'bg-[#1e1e1e]/90 border-[#333]'
+          : 'bg-[#fafafa]/95 border-gray-200'
+        }
       `}
       style={{ width: panelWidth }}
     >
@@ -426,22 +439,34 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
         }}
       />
       {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 border-b border-[#333] bg-[#252526]/60 backdrop-blur-md">
+      <div className={`h-12 flex items-center justify-between px-4 border-b backdrop-blur-md ${
+        isDarkMode
+          ? 'border-[#333] bg-[#252526]/60'
+          : 'border-gray-200 bg-white/60'
+      }`}>
         <div className="flex items-center gap-2 overflow-hidden">
-           <FileCode size={16} className="text-[#4EC9B0] flex-shrink-0" />
-           <span className="text-xs text-gray-400 truncate" title={displayFile || ''}>{displayFile || '选择文件'}</span>
+           <FileCode size={16} className={isDarkMode ? 'text-[#4EC9B0] flex-shrink-0' : 'text-[#0071E3] flex-shrink-0'} />
+           <span className={`text-xs truncate ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} title={displayFile || ''}>{displayFile || '选择文件'}</span>
         </div>
         <div className="flex items-center gap-2 min-w-0">
           {location && highlightLine && (
             <button
               onClick={jumpToHighlightLocation}
-              className="text-[11px] text-white font-mono bg-[#007acc]/80 hover:bg-[#007acc] px-2 py-0.5 rounded shadow-lg truncate max-w-[200px] cursor-pointer transition-colors"
+              className={`text-[11px] font-mono px-2 py-0.5 rounded shadow-sm truncate max-w-[200px] cursor-pointer transition-colors ${
+                isDarkMode
+                  ? 'text-white bg-[#007acc]/80 hover:bg-[#007acc]'
+                  : 'text-white bg-[#0071E3]/80 hover:bg-[#0071E3]'
+              }`}
               title={`点击跳转到 ${location.file}:${highlightLine}${highlightEndLine && highlightEndLine !== highlightLine ? `-${highlightEndLine}` : ''}`}
             >
               {location.file.split('/').pop()}:{highlightLine}{highlightEndLine && highlightEndLine !== highlightLine ? `-${highlightEndLine}` : ''}
             </button>
           )}
-          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 hover:bg-[#333] rounded flex-shrink-0">
+          <button onClick={onClose} className={`p-1 rounded flex-shrink-0 ${
+            isDarkMode
+              ? 'text-gray-400 hover:text-white hover:bg-[#333]'
+              : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+          }`}>
             <X size={18} />
           </button>
         </div>
@@ -452,7 +477,11 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
         {/* File Tree - Left Sidebar */}
         {fileTree.length > 0 && (
           <div
-            className="border-r border-[#333] bg-[#252526]/40 overflow-y-auto custom-scrollbar flex-shrink-0 relative"
+            className={`border-r overflow-y-auto custom-scrollbar flex-shrink-0 relative ${
+              isDarkMode
+                ? 'border-[#333] bg-[#252526]/40'
+                : 'border-gray-200 bg-gray-50/80'
+            }`}
             style={{ width: treeWidth }}
           >
             <div className="py-1">
@@ -472,12 +501,12 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
         {/* Code Area - Right Side */}
         <div className="flex-1 overflow-y-auto custom-scrollbar relative" ref={codeRef}>
           {loading ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+            <div className={`flex flex-col items-center justify-center h-full gap-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
               <p className="text-sm">加载源代码中...</p>
             </div>
           ) : error ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
+            <div className={`flex flex-col items-center justify-center h-full gap-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
               <FileCode size={40} strokeWidth={1} className="text-red-400" />
               <p className="text-red-400">加载失败</p>
               <p className="text-xs opacity-70">{error}</p>
@@ -486,17 +515,16 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
           ) : fileContent ? (
             <SyntaxHighlighter
               language={language}
-              style={vscDarkTheme as any}
+              style={isDarkMode ? vscDarkTheme as any : ghcolors}
               showLineNumbers={true}
               wrapLines={true}
               lineProps={(lineNumber: number) => {
                 const style: React.CSSProperties = { display: 'block' };
-                // 只有当显示的文件与 location 的文件相同时，才应用高亮
                 if (highlightLine && displayFile === location?.file) {
                   const endLine = highlightEndLine || highlightLine;
                   if (lineNumber >= highlightLine && lineNumber <= endLine) {
-                    style.backgroundColor = '#37373d';
-                    style.borderLeft = '4px solid #007acc';
+                    style.backgroundColor = isDarkMode ? '#37373d' : '#fff3cd';
+                    style.borderLeft = isDarkMode ? '4px solid #007acc' : '4px solid #0071E3';
                   }
                 }
                 return { style };
@@ -513,12 +541,12 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
               {fileContent}
             </SyntaxHighlighter>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
+            <div className={`flex flex-col items-center justify-center h-full gap-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
                <FileCode size={40} strokeWidth={1} />
                <p>{displayFile ? '未找到源代码文件' : '请选择文件'}</p>
                {displayFile && <p className="text-xs opacity-50">{displayFile}</p>}
                <p className="text-xs opacity-70 mt-2 text-center px-4">
-                 请将源代码文件放置在 <code className="bg-[#333] px-1 py-0.5 rounded">public/source-code/</code> 目录
+                 请将源代码文件放置在 <code className={`px-1 py-0.5 rounded ${isDarkMode ? 'bg-[#333]' : 'bg-gray-200'}`}>public/source-code/</code> 目录
                </p>
             </div>
           )}

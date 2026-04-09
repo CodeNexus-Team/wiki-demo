@@ -8,9 +8,40 @@ export interface MermaidEditorConfig {
   rankSpacing: number;
 }
 
+// 支持方向控制的图表类型
+const DIRECTION_TYPES = new Set(['flowchart', 'graph']);
+// 支持间距控制的图表类型（flowchart init 配置）
+const SPACING_TYPES = new Set(['flowchart', 'graph']);
+
+export function detectChartTypeFromCode(code: string): string {
+  const trimmed = code.trim().toLowerCase();
+  if (trimmed.startsWith('graph')) return 'graph';
+  if (trimmed.startsWith('flowchart')) return 'flowchart';
+  if (trimmed.startsWith('sequencediagram')) return 'sequenceDiagram';
+  if (trimmed.startsWith('classdiagram')) return 'classDiagram';
+  if (trimmed.startsWith('statediagram')) return 'stateDiagram';
+  if (trimmed.startsWith('erdiagram')) return 'erDiagram';
+  if (trimmed.startsWith('gantt')) return 'gantt';
+  if (trimmed.startsWith('pie')) return 'pie';
+  if (trimmed.startsWith('journey')) return 'journey';
+  if (trimmed.startsWith('gitgraph')) return 'gitGraph';
+  if (trimmed.startsWith('mindmap')) return 'mindmap';
+  if (trimmed.startsWith('timeline')) return 'timeline';
+  return 'unknown';
+}
+
+export function supportsDirection(chartType: string): boolean {
+  return DIRECTION_TYPES.has(chartType);
+}
+
+export function supportsSpacing(chartType: string): boolean {
+  return SPACING_TYPES.has(chartType);
+}
+
 export interface MermaidEditorState {
   code: string;
   config: MermaidEditorConfig;
+  chartType: string;
   setCode: (code: string) => void;
   setDirection: (direction: FlowDirection) => void;
   setNodeSpacing: (spacing: number) => void;
@@ -86,6 +117,7 @@ function updateCodeInit(
  */
 export function useMermaidEditor(initialCode: string = ''): MermaidEditorState {
   const [code, setCodeInternal] = useState(initialCode);
+  const [chartType, setChartType] = useState(() => detectChartTypeFromCode(initialCode));
   const [config, setConfig] = useState<MermaidEditorConfig>(() => {
     const extracted = extractInitConfig(initialCode);
     return {
@@ -97,21 +129,27 @@ export function useMermaidEditor(initialCode: string = ''): MermaidEditorState {
 
   const setCode = useCallback((newCode: string) => {
     setCodeInternal(newCode);
-    // 同步更新配置
-    const extracted = extractInitConfig(newCode);
-    setConfig((prev) => ({
-      direction: extractDirection(newCode),
-      nodeSpacing: extracted.nodeSpacing ?? prev.nodeSpacing,
-      rankSpacing: extracted.rankSpacing ?? prev.rankSpacing,
-    }));
+    const type = detectChartTypeFromCode(newCode);
+    setChartType(type);
+    // 仅对支持的类型同步配置
+    if (supportsDirection(type)) {
+      const extracted = extractInitConfig(newCode);
+      setConfig((prev) => ({
+        direction: extractDirection(newCode),
+        nodeSpacing: extracted.nodeSpacing ?? prev.nodeSpacing,
+        rankSpacing: extracted.rankSpacing ?? prev.rankSpacing,
+      }));
+    }
   }, []);
 
   const setDirection = useCallback((direction: FlowDirection) => {
+    if (!supportsDirection(chartType)) return;
     setConfig((prev) => ({ ...prev, direction }));
     setCodeInternal((prev) => updateCodeDirection(prev, direction));
-  }, []);
+  }, [chartType]);
 
   const setNodeSpacing = useCallback((spacing: number) => {
+    if (!supportsSpacing(chartType)) return;
     setConfig((prev) => {
       const newConfig = { ...prev, nodeSpacing: spacing };
       setCodeInternal((prevCode) =>
@@ -119,9 +157,10 @@ export function useMermaidEditor(initialCode: string = ''): MermaidEditorState {
       );
       return newConfig;
     });
-  }, []);
+  }, [chartType]);
 
   const setRankSpacing = useCallback((spacing: number) => {
+    if (!supportsSpacing(chartType)) return;
     setConfig((prev) => {
       const newConfig = { ...prev, rankSpacing: spacing };
       setCodeInternal((prevCode) =>
@@ -129,24 +168,21 @@ export function useMermaidEditor(initialCode: string = ''): MermaidEditorState {
       );
       return newConfig;
     });
-  }, []);
+  }, [chartType]);
 
-  // 处理后的代码（确保有正确的方向和配置）
+  // 处理后的代码（仅对 flowchart/graph 补充方向声明）
   const processedCode = useMemo(() => {
     let result = code;
-
-    // 仅对 flowchart/graph 类型补充方向声明，不影响其他图表类型
-    const isFlowchart = /^(flowchart|graph)\b/m.test(result);
-    if (isFlowchart && !/^(flowchart|graph)\s+(LR|RL|TB|BT|TD)/m.test(result)) {
+    if (supportsDirection(chartType) && !/^(flowchart|graph)\s+(LR|RL|TB|BT|TD)/m.test(result)) {
       result = result.replace(/^(flowchart|graph)\b/m, `$1 ${config.direction}`);
     }
-
     return result;
-  }, [code, config.direction]);
+  }, [code, config.direction, chartType]);
 
   return {
     code,
     config,
+    chartType,
     setCode,
     setDirection,
     setNodeSpacing,

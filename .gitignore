@@ -57,4 +57,5 @@ tmp/
 temp/
 *.tmp
 /output_all
-/wiki_test  
+/wiki_test
+/data/  

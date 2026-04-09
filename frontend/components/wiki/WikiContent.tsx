@@ -285,7 +285,7 @@ const WikiContentInner: React.FC<WikiContentProps> = ({
           `}
           style={{ width: isNavigatorVisible ? navigatorWidth : 0 }}
         >
-          <div className={`p-4 h-full flex flex-col ${isDarkMode ? 'bg-[#161b22]/50' : 'bg-white/20'}`}>
+          <div className={`px-2 py-3 h-full flex flex-col ${isDarkMode ? 'bg-[#161b22]/50' : 'bg-white/20'}`}>
             <WikiPageNavigator
               wikiPages={wikiPages}
               currentPage={currentPagePath}
@@ -356,11 +356,11 @@ const WikiContentInner: React.FC<WikiContentProps> = ({
       )}
 
       {/* Right: Wiki Content - Scrollable */}
-      <div className="flex-1 min-w-0 pt-8 px-8 md:pt-12 md:px-12 overflow-y-auto">
+      <div className="flex-1 min-w-0 pt-4 px-8 md:pt-6 md:px-12 overflow-y-auto">
         {/* Wiki Header */}
         <div className={`mb-8 pb-6 border-b flex justify-between items-center ${isDarkMode ? 'border-[#30363d]' : 'border-black/[0.04]'}`}>
           <div className="flex items-center gap-2">
-            <span className={`text-xs font-medium backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5 border ${
+            <span id="wiki-header-label" className={`text-xs font-medium backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5 border ${
               variant === 'orange'
                 ? 'text-orange-600 bg-orange-500/10 border-orange-500/20'
                 : isDarkMode

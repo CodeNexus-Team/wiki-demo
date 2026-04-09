@@ -42,6 +42,7 @@ export const MermaidEditModal: React.FC<MermaidEditModalProps> = ({
   const {
     code,
     config,
+    chartType,
     setCode,
     setDirection,
     setNodeSpacing,
@@ -329,6 +330,7 @@ export const MermaidEditModal: React.FC<MermaidEditModalProps> = ({
             direction={config.direction}
             nodeSpacing={config.nodeSpacing}
             rankSpacing={config.rankSpacing}
+            chartType={chartType}
             onDirectionChange={setDirection}
             onNodeSpacingChange={setNodeSpacing}
             onRankSpacingChange={setRankSpacing}

@@ -249,7 +249,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
       initMermaid(isDarkMode);
 
       let cleanChart = chart.replace(/```mermaid/g, '').replace(/```/g, '').trim();
-      const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`;
+      const id = `mermaid-${Math.random().toString(36).substring(2, 11)}`;
 
       // 检测图表类型
       const detectedChartType = detectChartType(cleanChart);
@@ -480,7 +480,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
     }
   }, [svg, isDarkMode]);
 
-  // 高亮节点 - SVG 渲染后通过 DOM 操作
+  // 高亮节点 - SVG 渲染后通过 DOM 操作，复用 extractNodeIdByChartType 匹配各类图表
   useEffect(() => {
     if (!containerRef.current || !svg) return;
 
@@ -489,7 +489,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
     // 清除之前的高亮样式
     container.querySelectorAll('[data-neo4j-highlighted]').forEach(el => {
       el.removeAttribute('data-neo4j-highlighted');
-      const shapes = el.querySelectorAll('rect, circle, ellipse, polygon, path');
+      const shapes = el.querySelectorAll('rect, circle, ellipse, polygon, path, line');
       shapes.forEach(shape => {
         (shape as HTMLElement).style.stroke = '';
         (shape as HTMLElement).style.strokeWidth = '';
@@ -502,8 +502,8 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
     // 高亮样式应用函数
     const applyHighlight = (group: Element) => {
       group.setAttribute('data-neo4j-highlighted', 'true');
-      // 高亮形状 - 直接子元素
-      const shapes = group.querySelectorAll(':scope > rect, :scope > circle, :scope > ellipse, :scope > polygon, :scope > path');
+      // 高亮形状 — 包含直接子元素和嵌套的形状（适配各类图表结构）
+      const shapes = group.querySelectorAll('rect, circle, ellipse, polygon, path, line');
       shapes.forEach(shape => {
         (shape as HTMLElement).style.stroke = '#f97316';
         (shape as HTMLElement).style.strokeWidth = '3px';
@@ -511,32 +511,26 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
       });
     };
 
-    // 查找需要高亮的元素
-    const allGroups = container.querySelectorAll('g[id]');
+    // 根据图表类型选择候选元素选择器
+    let selector = 'g[id]';
+    if (chartType === 'classDiagram') {
+      selector = 'g[id^="classId-"], g[id]';
+    } else if (chartType === 'sequenceDiagram') {
+      selector = 'g[id^="actor"], .actor, g[id]';
+    } else if (chartType === 'stateDiagram') {
+      selector = 'g[id^="state-"], .node, .state, g[id]';
+    }
 
-    allGroups.forEach(group => {
-      const id = group.getAttribute('id') || '';
+    const candidates = container.querySelectorAll(selector);
 
-      // 普通节点: flowchart-{highlightedNodeId}-数字
-      const nodeMatch = id.match(/^flowchart-(.+?)-\d+$/);
-      if (nodeMatch && nodeMatch[1] === highlightedNodeId) {
+    candidates.forEach(group => {
+      // 复用统一的 ID 提取逻辑
+      const extractedId = extractNodeIdByChartType(group, chartType);
+      if (extractedId === highlightedNodeId) {
         applyHighlight(group);
-        return;
-      }
-
-      // Subgraph/Cluster: 检查 .cluster 类（Mermaid 直接用原始 ID 作为 g 元素的 id）
-      if (group.classList.contains('cluster') && id === highlightedNodeId) {
-        applyHighlight(group);
-        return;
-      }
-
-      // 空的 subgraph 可能被渲染为普通节点，直接用 id 匹配
-      if (id === highlightedNodeId) {
-        applyHighlight(group);
-        return;
       }
     });
-  }, [svg, highlightedNodeId]);
+  }, [svg, highlightedNodeId, chartType]);
 
   if (error) {
     return (

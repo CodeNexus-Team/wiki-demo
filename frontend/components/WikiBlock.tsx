@@ -283,23 +283,40 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
       }
     };
 
+    // 判断名称是否是可打开的源码文件路径（包含 / 且以代码文件扩展名结尾）
+    const isSourceFile = (name: string) => {
+      return name.includes('/') && /\.(java|py|ts|tsx|js|jsx|go|rs|kt|xml|yml|yaml|json|sql)$/i.test(name);
+    };
+
+    // 右键点击：直接用名称作为文件路径打开源码面板
+    const handleNameContextMenu = (e: React.MouseEvent, name: string) => {
+      if (!isSourceFile(name) || !onSourceClick) return;
+      e.preventDefault();
+      // 构造一个虚拟的 WikiSource 直接打开
+      const virtualSource = { source_id: name, name: name, lines: [] as string[] };
+      onSourceClick(block.id, name, [virtualSource]);
+    };
+
     return (
       <div className={theme.neo4jCard.container}>
         <span className={theme.neo4jCard.label}>
           <Database size={12} className={theme.neo4jCard.labelIcon} />
-          Neo4j Source
+          Wiki Source
         </span>
         {nameArray.map(name => {
           const isActive = isNameActive(name);
           const relatedNodes = nameToNodes[name] || [];
+          const hasSource = isSourceFile(name);
           return (
             <span
               key={name}
-              className={`${theme.neo4jCard.idTag} ${isMermaid ? 'cursor-pointer' : ''} ${isActive ? theme.neo4jCard.idTagActive : ''}`}
-              title={isMermaid ? `点击高亮节点: ${relatedNodes.join(', ')}` : `Neo4j Node: ${name}`}
+              className={`${theme.neo4jCard.idTag} ${isMermaid || hasSource ? 'cursor-pointer' : ''} ${isActive ? theme.neo4jCard.idTagActive : ''}`}
+              title={hasSource ? `右键查看源码 · ${name}` : isMermaid ? `点击高亮节点: ${relatedNodes.join(', ')}` : name}
               onClick={() => handleNameClick(name)}
+              onContextMenu={(e) => handleNameContextMenu(e, name)}
             >
               <span className={isActive ? theme.neo4jCard.activeIdText : ''}>{name}</span>
+              {hasSource && <Code size={10} className="ml-0.5 opacity-50" />}
             </span>
           );
         })}

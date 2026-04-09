@@ -34,7 +34,8 @@ import {
   Eraser,
   Bot,
   Sun,
-  Moon
+  Moon,
+  X
 } from 'lucide-react';
 
 export interface InitialWikiData {
@@ -90,6 +91,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
   const justLoadedHistoryRef = useRef(false);
   // Agent 会话 ID：用于追问时 --resume 恢复上下文
   const agentSessionIdRef = useRef<string | null>(null);
+  /** 清理 Claude CLI session 本地文件并重置 ref */
+  const clearAgentSession = useCallback(() => {
+    if (agentSessionIdRef.current) {
+      codenexusWikiService.cleanupSession(agentSessionIdRef.current);
+      agentSessionIdRef.current = null;
+    }
+  }, []);
 
   // Custom Hooks
   const blockSelection = useBlockSelection({ blocks, isDiffMode: false });
@@ -125,6 +133,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       if (isDiffModeRef.current) return;
       setBlocks(newBlocks);
       setSelectedBlockIds(new Set());
+      // Wiki 页面加载后，收起对话框为浮动图标
+      setIsChatOpen(false);
     }
   });
   const {
@@ -310,6 +320,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       setSelectedBlockIds(new Set());
       setIsDiffMode(false);
       setIsChatExpanded(false);
+      setIsChatOpen(false);
 
       try {
         const wikiPage = await codenexusWikiService.fetchPage(initialWikiData.pagePath);
@@ -345,8 +356,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     closeSourcePanel();
     setSelectedBlockIds(new Set());
     setIsDiffMode(false);
-    agentSessionIdRef.current = null;
-  }, [type, selectedHistoryRecord, initialWikiData, clearHistory, setIsChatExpanded, closeSourcePanel, setSelectedBlockIds, setIsDiffMode]);
+    clearAgentSession();
+  }, [type, selectedHistoryRecord, initialWikiData, clearHistory, setIsChatExpanded, closeSourcePanel, setSelectedBlockIds, setIsDiffMode, clearAgentSession]);
 
   // Scroll to content end when blocks change (skip for direct wiki loading)
   useEffect(() => {
@@ -370,6 +381,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
   const hasContent = blocks.length > 0 || chatHistory.length > 0 || isLoading;
   const hasChatContent = chatHistory.length > 0;
+  // 默认收起为小图标，有内容时（无 wiki 页面 / 初始状态）或用户点击时展开
+  const [isChatOpen, setIsChatOpen] = useState(!blocks.length);
+  const [showFabTip, setShowFabTip] = useState(true);
 
   // Handlers
   const handleToggleCollapse = useCallback((blockId: string) => {
@@ -565,6 +579,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
     addUserMessage(currentPrompt, referencedBlocks.length > 0 ? referencedBlocks : undefined);
     clearSelection();
+    setIsChatOpen(true);
     setIsChatExpanded(true);
 
     const assistantMsgId = addAssistantMessage(['初始化请求...']);
@@ -715,7 +730,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
               }
               const modifiedBlocks = await applyModifyPageResponse(response, queryBlocks);
               enterDiffMode(modifiedBlocks, response, queryBlocks);
-              agentSessionIdRef.current = null; // 进入 diff 后清除 session
+              clearAgentSession(); // 进入 diff 后清除 session
 
               const replaceCount = response.replace_blocks?.length ?? 0;
               const insertCount = response.insert_blocks.length;
@@ -733,12 +748,23 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             return;
           } else {
             // 无上次会话 → 走原有 qaQuery
-            const answer = await codenexusWikiService.qaQuery(
+            const qaResult = await codenexusWikiService.qaQuery(
               currentPagePath,
               currentPrompt,
-              (msg) => updateAssistantProgress(assistantMsgId, msg)
+              (msg) => updateAssistantProgress(assistantMsgId, msg),
+              async (question, options, multiSelect) => {
+                setChatHistory(prev => prev.map(msg =>
+                  msg.id === assistantMsgId
+                    ? { ...msg, content: `💬 ${question}`, steps: [...(msg.steps || []), 'Done'], clarificationOptions: options, clarificationMultiSelect: multiSelect }
+                    : msg
+                ));
+                return new Promise<string>((resolve) => {
+                  setClarificationResolver(resolve);
+                });
+              }
             );
-            finalizeAssistantMessage(assistantMsgId, answer);
+            agentSessionIdRef.current = qaResult.session_id ?? null;
+            finalizeAssistantMessage(assistantMsgId, qaResult.answer);
           }
         } else {
           updateAssistantProgress(assistantMsgId, '正在使用 CodeNexus AI 分析您的问题...');
@@ -799,6 +825,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         location={activeSourceLocation}
         panelWidth={sourcePanelWidth}
         onWidthChange={setSourcePanelWidth}
+        isDarkMode={isDarkMode}
       />
 
       {/* Main Content Area */}
@@ -838,7 +865,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
         )}
 
         {blocks.length > 0 && (
-          <div className="flex flex-col flex-1 min-h-0 px-4 md:px-12 pt-6">
+          <div className="flex flex-col flex-1 min-h-0 px-2 md:px-4 pt-2">
             {/* 返回按钮（从 WikiBrowser 进入时显示） */}
             {onBack && (
               <div className="mb-3 flex-shrink-0">
@@ -857,12 +884,56 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             )}
             {/* Unified Card Container */}
             <div className={`
-              flex flex-col flex-1 min-h-0 rounded-xl border backdrop-blur-xl overflow-hidden
+              relative flex flex-col flex-1 min-h-0 rounded-xl border backdrop-blur-xl overflow-hidden
               ${isDarkMode
                 ? 'bg-[#0d1117]/90 border-[#30363d]'
                 : 'bg-white/20 border-white/30'
               }
             `}>
+              {/* AI 助手按钮 — 固定在卡片右上角，不随内容滚动 */}
+              {!isChatOpen && hasContent && (
+                <div className="absolute z-20 flex items-center gap-1.5" style={{ top: '7%', right: '18%' }}>
+                  {showFabTip && (
+                    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap ${
+                      isDarkMode
+                        ? 'bg-[#161b22] text-[#7d8590] border border-[#30363d]'
+                        : 'bg-white/80 text-[#86868b] border border-gray-200/60 backdrop-blur-sm'
+                    }`}>
+                      <span>
+                        {hasSelection
+                          ? `已选 ${selectedBlockIds.size} 个块`
+                          : hasChatContent ? '继续对话' : '选中块后提问'}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setShowFabTip(false); }}
+                        className={`p-0.5 rounded-full transition-colors ${
+                          isDarkMode
+                            ? 'text-[#484f58] hover:text-[#e6edf3]'
+                            : 'text-[#d2d2d7] hover:text-[#1d1d1f]'
+                        }`}
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setIsChatOpen(true)}
+                    className={`relative w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110 ${
+                      isDarkMode
+                        ? 'bg-gradient-to-br from-[#1f6feb] to-[#58a6ff] text-white shadow-sm'
+                        : 'bg-gradient-to-br from-[#0071E3] to-[#5AC8FA] text-white shadow-sm'
+                    }`}
+                    title="打开 AI 助手"
+                  >
+                    {hasChatContent && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[9px] text-white flex items-center justify-center font-bold">
+                        {chatHistory.filter(m => m.role === 'assistant').length}
+                      </span>
+                    )}
+                    <Bot size={20} />
+                  </button>
+                </div>
+              )}
               {/* Page Tab Bar - Card Header */}
               {tabs.length > 0 && (
                 <PageTabBar
@@ -910,14 +981,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
 
       {/* Unified Chat Deck (Bottom Sheet) */}
       <div
-        className={`fixed bottom-0 ${isSidebarCollapsed ? 'left-16' : 'left-64'} z-50 flex flex-col items-center transition-all duration-300 ease-apple-ease`}
+        className={`fixed bottom-0 ${isSidebarCollapsed ? 'left-16' : 'left-64'} z-50 flex flex-col items-center transition-all duration-500 ease-apple-ease ${
+          !isChatOpen && hasContent ? 'translate-y-full pointer-events-none opacity-0' : 'translate-y-0 opacity-100'
+        }`}
         style={{ right: isSourcePanelOpen ? sourcePanelWidth : 0 }}
       >
         {/* Diff Confirmation Bar (Floating) */}
         {isDiffMode && (
           <DiffConfirmBar
-            onApply={() => { applyDiffChanges(); agentSessionIdRef.current = null; }}
-            onDiscard={() => { discardDiffChanges(); agentSessionIdRef.current = null; }}
+            onApply={() => { applyDiffChanges(); clearAgentSession(); }}
+            onDiscard={() => { discardDiffChanges(); }}
             variant="floating"
           />
         )}
@@ -961,6 +1034,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 message={msg}
                 isLoading={isLoading}
                 variant="blue"
+                isDarkMode={isDarkMode}
                 onClarificationSelect={msg.clarificationOptions && clarificationResolverRef.current ? (opt) => {
                   const resolver = clarificationResolverRef.current;
                   if (resolver) {
@@ -1037,7 +1111,22 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
               }}
             />
 
-            <div className="flex justify-end items-center mt-2">
+            <div className="flex justify-between items-center mt-2">
+              {/* 最小化按钮（有 wiki 内容时显示） */}
+              {hasContent ? (
+                <button
+                  onClick={() => setIsChatOpen(false)}
+                  className={`p-2 rounded-full transition-colors text-xs flex items-center gap-1 ${
+                    isDarkMode
+                      ? 'text-[#7d8590] hover:text-[#e6edf3] hover:bg-[#21262d]'
+                      : 'text-[#86868b] hover:text-[#1d1d1f] hover:bg-gray-100'
+                  }`}
+                  title="最小化对话框"
+                >
+                  <X size={14} />
+                  <span>收起</span>
+                </button>
+              ) : <div />}
               <div className="flex items-center gap-2">
                 {prompt && !isLoading && (
                   <button
