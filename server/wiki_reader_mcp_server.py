@@ -168,8 +168,10 @@ def read_wiki_page(path: str) -> str:
         indent=2,
     )
 
-    if len(result) > 30000:
-        result = result[:30000] + "\n... (内容已截断，请用 get_page_outline 查看完整结构，再用 read_section 读具体段落)"
+    # 截断上限 20KB:保留余量给外层 stream-json 的 JSON escape(换行/引号/反斜杠 escape 会让体积膨胀 30%+),
+    # 避免单个 tool_use_result 事件超过 asyncio subprocess StreamReader 的单行上限。
+    if len(result) > 20000:
+        result = result[:20000] + "\n... (内容已截断，请用 get_page_outline 查看完整结构，再用 read_wiki_section 读具体段落)"
 
     logger.info(f"read_wiki_page: 返回 {len(result)} 字符")
     return result
