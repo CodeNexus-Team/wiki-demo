@@ -8,9 +8,11 @@ import {
   ModifyPageResponse,
   NewPageResponse,
   QaAnswerResponse,
+  QaQueryResult,
   ExpandedQuestion,
   WikiPage,
-  WikiTreeNode
+  WikiTreeNode,
+  WikiIndex
 } from '../types';
 import { wikiPageCache } from './wikiPageCache';
 
@@ -425,7 +427,35 @@ class CodeNexusWikiService {
   }
 
   /**
+   * 获取 wiki_index.json 总览数据
+   */
+  async fetchWikiIndex(): Promise<WikiIndex | null> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/wiki_index`);
+      if (response.status === 404) {
+        // 未生成 index 时返回 null（前端可降级到文件树）
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.warn('[CodeNexus Service] 获取 wiki_index 失败:', error);
+      return null;
+    }
+  }
+
+  /**
    * 自由问答：针对当前 Wiki 页面和源码提问
+   *
+   * 返回结构对齐 detailedQuery：
+   *   - answer: 主回答正文（始终存在）
+   *   - session_id: 会话 id
+   *   - insert_blocks / delete_blocks / replace_blocks: 可选的 SUGGEST_EDIT 修改建议
+   *   - insert_sources / delete_sources: source_id 增删（保持和 ModifyPageResponse 对齐）
+   *
+   * 当任一 *_blocks 非空时，前端应展示"AI 建议修改 N 处"按钮让用户确认。
    */
   async qaQuery(
     pagePath: string,
@@ -433,7 +463,7 @@ class CodeNexusWikiService {
     onProgress?: (message: string) => void,
     onClarify?: (question: string, options: string[], multiSelect?: boolean) => Promise<string>,
     resumeSessionId?: string
-  ): Promise<{ answer: string; session_id?: string }> {
+  ): Promise<QaQueryResult> {
     const request: Record<string, unknown> = { page_path: pagePath, user_query: userQuery };
     if (resumeSessionId) {
       request.resume_session_id = resumeSessionId;
@@ -455,8 +485,7 @@ class CodeNexusWikiService {
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let answer = '';
-      let sessionId: string | undefined;
+      let result: QaQueryResult | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -491,8 +520,15 @@ class CodeNexusWikiService {
                 onProgress?.('已提交回答，AI 继续分析...');
               }
             } else if (event.type === 'result') {
-              answer = event.answer;
-              sessionId = event.session_id;
+              result = {
+                answer: event.answer ?? '',
+                session_id: event.session_id,
+                insert_blocks: event.insert_blocks ?? [],
+                delete_blocks: event.delete_blocks ?? [],
+                replace_blocks: event.replace_blocks ?? [],
+                insert_sources: event.insert_sources ?? [],
+                delete_sources: event.delete_sources ?? [],
+              };
             } else if (event.type === 'error') {
               throw new Error(event.message);
             }
@@ -502,8 +538,8 @@ class CodeNexusWikiService {
         }
       }
 
-      if (!answer) throw new Error('未收到回答');
-      return { answer, session_id: sessionId };
+      if (!result || !result.answer) throw new Error('未收到回答');
+      return result;
     } catch (error) {
       console.error('问答查询失败:', error);
       throw new Error(`问答查询失败: ${error instanceof Error ? error.message : String(error)}`);

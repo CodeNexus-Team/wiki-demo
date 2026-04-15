@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AnalysisType, WikiBlock, MermaidMetadata, ExpandedQuestion, WikiHistoryRecord } from '../types';
+import { AnalysisType, WikiBlock, MermaidMetadata, ExpandedQuestion, WikiHistoryRecord, ModifyPageResponse } from '../types';
 import { codenexusWikiService } from '../services/codenexusWikiService';
 import { wikiPageCache } from '../services/wikiPageCache';
 import { parseWikiPageToBlocks } from '../utils/wikiContentParser';
@@ -98,6 +98,15 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       agentSessionIdRef.current = null;
     }
   }, []);
+  // 待自动执行的 query（来自 wiki 概览页的提问入口）
+  const pendingAutoQueryRef = useRef<string | null>(null);
+  // 纯 QA 模式下模型主动提出的修改建议，等待用户在气泡按钮上确认
+  // key: 聊天消息 id，value: 触发 enterDiffMode 需要的快照
+  const pendingSuggestEditsRef = useRef<Map<string, {
+    response: ModifyPageResponse;
+    queryBlocks: WikiBlock[];
+    queryPagePath: string;
+  }>>(new Map());
 
   // Custom Hooks
   const blockSelection = useBlockSelection({ blocks, isDiffMode: false });
@@ -124,6 +133,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setIsChatExpanded,
     clearHistory
   } = chat;
+
+  /** 把某条 suggestEdit 标记为已解析，并从 ref 中移除 */
+  const resolveSuggestEdit = useCallback((messageId: string, resolution: 'confirmed' | 'discarded') => {
+    pendingSuggestEditsRef.current.delete(messageId);
+    setChatHistory(prev => prev.map(m =>
+      m.id === messageId && m.suggestEdit
+        ? { ...m, suggestEdit: { ...m.suggestEdit, resolution } }
+        : m
+    ));
+  }, [setChatHistory]);
 
   const wikiPagesHook = useWikiPages({
     mainContentRef,
@@ -390,7 +409,12 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
     setBlocks(prevBlocks => toggleBlockCollapse(prevBlocks, blockId));
   }, []);
 
-  const handlePageSwitch = useCallback(async (pagePath: string) => {
+  const handlePageSwitch = useCallback(async (pagePath: string, autoQuery?: string) => {
+    // 暂存待自动执行的提问，页面加载完后由 effect 触发 handleAnalyze
+    if (autoQuery) {
+      pendingAutoQueryRef.current = autoQuery;
+    }
+
     // Save current tab state before switching
     if (activeTabId) {
       saveCurrentTabState(blocks, selectedBlockIds);
@@ -416,7 +440,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       setBlocks(newBlocks);
       openTab(pagePath, newBlocks);
     }
-  }, [handlePageSwitchBase, activeTabId, tabs, saveCurrentTabState, switchTab, getTabState, openTab, blocks, selectedBlockIds, setCurrentPagePath]);
+  }, [handlePageSwitchBase, activeTabId, tabs, saveCurrentTabState, switchTab, getTabState, openTab, blocks, selectedBlockIds, setCurrentPagePath, setSelectedBlockIds]);
 
   const handleTabClick = useCallback(async (tabId: string) => {
     if (tabId === activeTabId) return;
@@ -748,8 +772,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             return;
           } else {
             // 无上次会话 → 走原有 qaQuery
+            const queryPagePathQa = currentPagePath;
+            const queryBlocksQa = [...blocks];
+
             const qaResult = await codenexusWikiService.qaQuery(
-              currentPagePath,
+              queryPagePathQa,
               currentPrompt,
               (msg) => updateAssistantProgress(assistantMsgId, msg),
               async (question, options, multiSelect) => {
@@ -764,6 +791,47 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
               }
             );
             agentSessionIdRef.current = qaResult.session_id ?? null;
+
+            // 判断是否带了修改建议（纯 QA 模式下的自主修改）
+            const replaceCountQa = qaResult.replace_blocks?.length ?? 0;
+            const insertCountQa = qaResult.insert_blocks?.length ?? 0;
+            const deleteCountQa = qaResult.delete_blocks?.length ?? 0;
+            const hasSuggestEdit = replaceCountQa + insertCountQa + deleteCountQa > 0;
+
+            if (hasSuggestEdit) {
+              // 构造一个 ModifyPageResponse 快照供后续 enterDiffMode 使用
+              const suggestResponse: ModifyPageResponse = {
+                insert_blocks: qaResult.insert_blocks,
+                delete_blocks: qaResult.delete_blocks,
+                replace_blocks: qaResult.replace_blocks,
+                insert_sources: qaResult.insert_sources,
+                delete_sources: qaResult.delete_sources,
+              };
+              pendingSuggestEditsRef.current.set(assistantMsgId, {
+                response: suggestResponse,
+                queryBlocks: queryBlocksQa,
+                queryPagePath: queryPagePathQa,
+              });
+              // 同时把 suggestEdit 元信息写到消息上，用于渲染按钮
+              setChatHistory(prev => prev.map(m =>
+                m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      content: qaResult.answer,
+                      steps: [...(m.steps || []), 'Done'],
+                      suggestEdit: {
+                        replaceCount: replaceCountQa,
+                        insertCount: insertCountQa,
+                        deleteCount: deleteCountQa,
+                        resolution: 'pending',
+                      },
+                    }
+                  : m
+              ));
+              setIsLoading(false);
+              return;
+            }
+
             finalizeAssistantMessage(assistantMsgId, qaResult.answer);
           }
         } else {
@@ -797,6 +865,22 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       setIsLoading(false);
     }
   }, [prompt, selectedBlockIds, getReferencedBlocks, addUserMessage, clearSelection, setIsChatExpanded, addAssistantMessage, currentPagePath, updateAssistantProgress, applyModifyPageResponse, blocks, enterDiffMode, finalizeAssistantMessage, setWikiPages, setCurrentPagePath, setChatHistory, type, saveToHistory, setIsDiffMode, openTab, clearTabs, forceActivateTab, saveTabStateById, cancelPendingLoad]);
+
+  // 自动执行待处理的 query：页面加载完成后从 ref 取出，写入 prompt 并触发 handleAnalyze
+  useEffect(() => {
+    if (!pendingAutoQueryRef.current) return;
+    if (isLoadingPage) return;
+
+    const queryToRun = pendingAutoQueryRef.current;
+    pendingAutoQueryRef.current = null;
+    // 打开聊天面板，预填 prompt，下一帧触发 handleAnalyze
+    setIsChatOpen(true);
+    setIsChatExpanded(true);
+    setPrompt(queryToRun);
+    // 用 setTimeout 让 React 把 prompt 状态先 flush 进去
+    setTimeout(() => handleAnalyze(), 50);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPagePath, isLoadingPage, blocks]);
 
   return (
     <div className={`h-full relative flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0d1117]' : 'bg-[#F5F5F7]'}`}>
@@ -1058,6 +1142,33 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                     resolver(joined);
                   }
                 } : undefined}
+                onSuggestEditConfirm={msg.suggestEdit?.resolution === 'pending' ? async (messageId) => {
+                  const pending = pendingSuggestEditsRef.current.get(messageId);
+                  if (!pending) return;
+                  const { response, queryBlocks, queryPagePath } = pending;
+
+                  cancelPendingLoad();
+                  isDiffModeRef.current = true;
+
+                  // 如果用户切到了别的页，先切回来
+                  const livePagePath = currentPagePathRef.current;
+                  if (livePagePath !== queryPagePath) {
+                    saveTabStateById(livePagePath, blocksRef.current, new Set());
+                    setCurrentPagePath(queryPagePath);
+                    forceActivateTab(queryPagePath);
+                  }
+
+                  const modifiedBlocks = await applyModifyPageResponse(response, queryBlocks);
+                  enterDiffMode(modifiedBlocks, response, queryBlocks);
+                  resolveSuggestEdit(messageId, 'confirmed');
+                  clearAgentSession();
+                } : undefined}
+                onSuggestEditDiscard={msg.suggestEdit?.resolution === 'pending' ? (messageId) => {
+                  resolveSuggestEdit(messageId, 'discarded');
+                } : undefined}
+                onWikiPageClick={(pagePath) => {
+                  handlePageSwitch(pagePath);
+                }}
               />
             ))}
 

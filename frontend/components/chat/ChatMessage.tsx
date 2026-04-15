@@ -1,11 +1,13 @@
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { ghcolors, vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ChatMessage as ChatMessageType, WikiBlock } from '../../types';
-import { Bot, Quote } from 'lucide-react';
+import { Bot, FileText, Quote } from 'lucide-react';
 import { ThinkingChain } from './ThinkingChain';
+
+const WIKI_LINK_PREFIX = 'wiki://';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -14,6 +16,11 @@ interface ChatMessageProps {
   isDarkMode?: boolean;
   onClarificationSelect?: (option: string) => void;
   onClarificationMultiSubmit?: (options: string[]) => void;
+  // 纯 QA 模式自主修改建议：点击"查看差异"触发 enterDiffMode
+  onSuggestEditConfirm?: (messageId: string) => void;
+  onSuggestEditDiscard?: (messageId: string) => void;
+  // 点击 wiki:// 协议链接时切换到对应 wiki 页面
+  onWikiPageClick?: (pagePath: string) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
@@ -22,7 +29,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   variant = 'blue',
   isDarkMode = false,
   onClarificationSelect,
-  onClarificationMultiSubmit
+  onClarificationMultiSubmit,
+  onSuggestEditConfirm,
+  onSuggestEditDiscard,
+  onWikiPageClick,
 }) => {
   const [multiSelected, setMultiSelected] = React.useState<Set<string>>(new Set());
   const [showCustomInput, setShowCustomInput] = React.useState(false);
@@ -79,9 +89,43 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             {isUser ? message.content : (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                // 放行 wiki:// 协议，react-markdown 9.x 默认会 sanitize 非 http/https 的 url
+                urlTransform={(url) => url.startsWith(WIKI_LINK_PREFIX) ? url : defaultUrlTransform(url)}
                 components={{
                   p: ({node, ...props}) => <p {...props} className="mb-2 last:mb-0" />,
-                  a: ({node, ...props}) => <a {...props} className={isDarkMode ? 'text-[#58a6ff] underline' : 'text-[#0071E3] underline'} />,
+                  a: ({node, href, children, ...props}) => {
+                    if (typeof href === 'string' && href.startsWith(WIKI_LINK_PREFIX)) {
+                      // react-markdown 9.x 会对 markdown url 做 percent-encoding，
+                      // 切出来后需要 decodeURIComponent 还原成原始中文路径
+                      const rawPath = href.slice(WIKI_LINK_PREFIX.length);
+                      let wikiPath: string;
+                      try {
+                        wikiPath = decodeURIComponent(rawPath);
+                      } catch {
+                        wikiPath = rawPath;
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onWikiPageClick?.(wikiPath);
+                          }}
+                          title={`跳转到 wiki 页面：${wikiPath}`}
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.95em] font-medium align-baseline transition-colors border ${
+                            isDarkMode
+                              ? 'bg-[#1f2937] text-[#58a6ff] border-[#30363d] hover:bg-[#30363d] hover:border-[#58a6ff]'
+                              : 'bg-[#eff6ff] text-[#0071E3] border-[#c5d9f5] hover:bg-[#dbe8ff] hover:border-[#0071E3]'
+                          }`}
+                        >
+                          <FileText size={12} className="shrink-0" />
+                          <span>{children}</span>
+                        </button>
+                      );
+                    }
+                    return <a {...props} href={href} className={isDarkMode ? 'text-[#58a6ff] underline' : 'text-[#0071E3] underline'}>{children}</a>;
+                  },
                   strong: ({node, ...props}) => <strong {...props} className="font-semibold" />,
                   ul: ({node, ...props}) => <ul {...props} className="list-disc pl-5 mb-2" />,
                   ol: ({node, ...props}) => <ol {...props} className="list-decimal pl-5 mb-2" />,
@@ -221,6 +265,63 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     确认选择 ({multiSelected.size + (customText.trim() ? 1 : 0)})
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* Suggest Edit（纯 QA 模式下模型主动提出的修改建议） */}
+            {!isUser && message.suggestEdit && (
+              <div className={`mt-3 pt-3 border-t ${isDarkMode ? 'border-[#30363d]/60' : 'border-[#e5e5ea]/60'}`}>
+                {(() => {
+                  const { replaceCount, insertCount, deleteCount, resolution } = message.suggestEdit!;
+                  const total = replaceCount + insertCount + deleteCount;
+                  const parts: string[] = [];
+                  if (replaceCount > 0) parts.push(`替换 ${replaceCount}`);
+                  if (insertCount > 0) parts.push(`新增 ${insertCount}`);
+                  if (deleteCount > 0) parts.push(`删除 ${deleteCount}`);
+
+                  if (resolution === 'confirmed') {
+                    return (
+                      <div className={`text-xs ${isDarkMode ? 'text-[#7d8590]' : 'text-gray-500'}`}>
+                        ✓ 已进入差异预览（{parts.join('、')}）
+                      </div>
+                    );
+                  }
+                  if (resolution === 'discarded') {
+                    return (
+                      <div className={`text-xs ${isDarkMode ? 'text-[#7d8590]' : 'text-gray-500'}`}>
+                        ✗ 已放弃本次修改建议
+                      </div>
+                    );
+                  }
+                  // pending
+                  return (
+                    <div className="flex flex-col gap-2">
+                      <div className={`text-xs ${isDarkMode ? 'text-[#e6edf3]' : 'text-[#1d1d1f]'}`}>
+                        💡 AI 另外建议对本页进行 {total} 处修改（{parts.join('、')}），是否查看差异？
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => onSuggestEditConfirm?.(message.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs text-white transition-all ${
+                            isDarkMode ? 'bg-[#238636] hover:bg-[#2ea043]' : 'bg-[#0071E3] hover:bg-[#005bb5]'
+                          }`}
+                        >
+                          查看差异
+                        </button>
+                        <button
+                          onClick={() => onSuggestEditDiscard?.(message.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs transition-all border ${
+                            isDarkMode
+                              ? 'bg-transparent text-[#7d8590] hover:text-[#e6edf3] border-[#30363d] hover:border-[#7d8590]'
+                              : 'bg-transparent text-gray-500 hover:text-gray-700 border-gray-300 hover:border-gray-500'
+                          }`}
+                        >
+                          忽略建议
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>

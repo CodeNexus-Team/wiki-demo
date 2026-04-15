@@ -12,6 +12,10 @@ def main():
     parser = argparse.ArgumentParser(description="Start the wiki demo server")
     parser.add_argument("root_path", help="Root directory for wiki content")
     parser.add_argument("c", nargs="?", help="Convert markdown files to JSON format")
+    parser.add_argument("--build-index", action="store_true",
+                        help="Build wiki_index.json after conversion (uses LLM)")
+    parser.add_argument("--no-llm-index", action="store_true",
+                        help="When building index, use rule-based summary instead of LLM")
 
     args = parser.parse_args()
     root_path = Path(args.root_path).resolve()
@@ -86,6 +90,19 @@ def main():
         # 关闭 Neo4j 连接
         parser_obj.close()
         print("Conversion complete!")
+
+    # Build wiki_index.json (可选)
+    if args.build_index:
+        from build_wiki_index import build_index
+        import asyncio
+        print(f"\nBuilding wiki_index.json...")
+        asyncio.run(build_index(
+            result_dir,
+            use_llm=not args.no_llm_index,
+            concurrency=10,
+            force=False,
+            verbose=True,
+        ))
 
     # Set wiki_result path as environment variable for the server to use
     os.environ["WIKI_ROOT_PATH"] = str(result_dir)

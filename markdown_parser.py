@@ -4,13 +4,23 @@ import uuid
 import os
 import argparse
 import sys
+from pathlib import Path
 from neo4j import GraphDatabase
 
+# 加载 server/.env（Neo4j 连接凭据与 neo4j_mcp_server.py 共享同一份 .env）
+try:
+    from dotenv import load_dotenv
+    _ENV_PATH = Path(__file__).parent / "server" / ".env"
+    if _ENV_PATH.exists():
+        load_dotenv(_ENV_PATH)
+except ImportError:
+    pass
+
 class MarkdownToJsonParser:
-    # Neo4j 连接配置
-    NEO4J_URI = "neo4j://127.0.0.1:7689"
-    NEO4J_USER = "neo4j"
-    NEO4J_PASSWORD = "c8a3974ba62qcc2"
+    # Neo4j 连接配置（从环境变量读取，默认值仅作 fallback）
+    NEO4J_URI = os.environ.get("NEO4J_URI", "neo4j://127.0.0.1:7687")
+    NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
 
     def __init__(self):
         self.global_id_counter = 0
@@ -20,12 +30,19 @@ class MarkdownToJsonParser:
         self._neo4j_name_cache = {}  # 缓存已查询的 neo4j id -> name 映射
 
     def _get_neo4j_driver(self):
-        """获取 Neo4j 驱动连接（延迟初始化）"""
+        """获取 Neo4j 驱动连接（延迟初始化）。凭据缺失或连接失败时返回 None，调用方需做降级。"""
         if self._neo4j_driver is None:
-            self._neo4j_driver = GraphDatabase.driver(
-                self.NEO4J_URI,
-                auth=(self.NEO4J_USER, self.NEO4J_PASSWORD)
-            )
+            if not self.NEO4J_PASSWORD:
+                print("警告: NEO4J_PASSWORD 未配置，跳过 Neo4j 查询。请检查 server/.env", file=sys.stderr)
+                return None
+            try:
+                self._neo4j_driver = GraphDatabase.driver(
+                    self.NEO4J_URI,
+                    auth=(self.NEO4J_USER, self.NEO4J_PASSWORD)
+                )
+            except Exception as e:
+                print(f"警告: Neo4j 驱动初始化失败: {e}", file=sys.stderr)
+                return None
         return self._neo4j_driver
 
     def _query_neo4j_name(self, node_id):
@@ -36,8 +53,13 @@ class MarkdownToJsonParser:
         if node_id in self._neo4j_name_cache:
             return self._neo4j_name_cache[node_id]
 
+        driver = self._get_neo4j_driver()
+        if driver is None:
+            # 凭据缺失或连接失败,缓存 None 避免重复警告
+            self._neo4j_name_cache[node_id] = None
+            return None
+
         try:
-            driver = self._get_neo4j_driver()
             with driver.session() as session:
                 # 尝试将 node_id 转为整数，如果成功则使用 id() 查询
                 try:

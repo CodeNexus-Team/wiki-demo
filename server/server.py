@@ -324,6 +324,10 @@ def list_wiki_pages(wiki_root: str) -> List[Dict[str, Any]]:
             return items
 
         for entry in entries:
+            # 跳过隐藏目录/文件（如 .index/.meta）
+            if entry.startswith("."):
+                continue
+
             full_path = os.path.join(dir_path, entry)
             rel_path = os.path.join(rel_prefix, entry) if rel_prefix else entry
 
@@ -358,6 +362,32 @@ async def list_wikis_api() -> List[Dict[str, Any]]:
         return list_wiki_pages(wiki_root)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取 Wiki 列表失败: {str(e)}")
+
+
+@app.get("/api/wiki_index")
+async def wiki_index_api() -> Dict[str, Any]:
+    """
+    获取 wiki_index.json 总览数据。
+    返回 LLM 生成的页面摘要、关键词、跨页引用等元信息，
+    供前端总览页和 AI 路由使用。
+    """
+    try:
+        wiki_root = os.environ.get("WIKI_ROOT_PATH", "")
+        if os.path.isabs(wiki_root):
+            base_dir = wiki_root
+        else:
+            base_dir = os.path.join(os.path.dirname(__file__), wiki_root)
+        index_path = os.path.join(base_dir, ".index", "wiki_index.json")
+
+        if not os.path.isfile(index_path):
+            raise HTTPException(status_code=404, detail="wiki_index.json 不存在，请先运行 build_wiki_index.py 生成")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取 wiki_index 失败: {str(e)}")
 
 
 @app.get("/api/search_wiki")
@@ -421,6 +451,9 @@ async def search_wiki_api(q: str) -> List[Dict[str, Any]]:
     pattern = os.path.join(base_dir, "**", "*.json")
     for json_file in glob_mod.glob(pattern, recursive=True):
         rel_path = os.path.relpath(json_file, base_dir)
+        # 跳过隐藏目录（.index/.meta）下的文件
+        if any(part.startswith(".") for part in rel_path.split(os.sep)):
+            continue
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -448,7 +481,12 @@ async def scan_wikis_api() -> ExecuteWorkflowResponse:
         import glob
         pattern = os.path.join(base_dir, "**", "*.json")
         json_files = glob.glob(pattern, recursive=True)
-        wiki_pages = [os.path.relpath(f, base_dir) for f in json_files]
+        # 排除隐藏目录（如 .index/.meta）下的文件
+        wiki_pages = [
+            os.path.relpath(f, base_dir)
+            for f in json_files
+            if not any(part.startswith(".") for part in os.path.relpath(f, base_dir).split(os.sep))
+        ]
 
         return ExecuteWorkflowResponse(
             wiki_root=wiki_root,
@@ -709,7 +747,18 @@ async def qa_query(request: QaQueryRequest):
                     yield f"data: {json.dumps({'type': 'progress', 'message': msg}, ensure_ascii=False)}\n\n"
 
             qa_result = task.result()
-            yield f"data: {json.dumps({'type': 'result', 'answer': qa_result['answer'], 'session_id': qa_result.get('session_id')}, ensure_ascii=False)}\n\n"
+            # 兼容新格式：可能包含 insert_blocks / delete_blocks / replace_blocks 作为建议修改
+            result_payload = {
+                "type": "result",
+                "answer": qa_result.get("answer", ""),
+                "session_id": qa_result.get("session_id"),
+                "insert_blocks": qa_result.get("insert_blocks", []),
+                "delete_blocks": qa_result.get("delete_blocks", []),
+                "replace_blocks": qa_result.get("replace_blocks", []),
+                "insert_sources": qa_result.get("insert_sources", []),
+                "delete_sources": qa_result.get("delete_sources", []),
+            }
+            yield f"data: {json.dumps(result_payload, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': f'问答失败: {str(e)}'}, ensure_ascii=False)}\n\n"

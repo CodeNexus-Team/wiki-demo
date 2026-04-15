@@ -96,6 +96,14 @@ export interface ChatMessage {
   references?: WikiBlock[]; // Context blocks referenced by the user
   clarificationOptions?: string[]; // Options for clarification questions
   clarificationMultiSelect?: boolean; // Whether multiple options can be selected
+  // 纯 QA 模式下模型提出的自主修改建议（需要用户点击按钮确认后才进 diff 模式）
+  suggestEdit?: {
+    replaceCount: number;
+    insertCount: number;
+    deleteCount: number;
+    // resolution: 'pending' 等待用户 | 'confirmed' 已确认 | 'discarded' 已放弃
+    resolution: 'pending' | 'confirmed' | 'discarded';
+  };
   timestamp: number;
 }
 
@@ -193,6 +201,57 @@ export interface NewPageResponse {
 // 模型判定为提问时的回答响应
 export interface QaAnswerResponse {
   qa_answer: string;
+}
+
+// qaQuery 的完整返回结构（含可选的 SUGGEST_EDIT 修改建议）
+export interface QaQueryResult {
+  answer: string;
+  session_id?: string;
+  // 可选的修改建议（字段与 ModifyPageResponse 对齐）
+  insert_blocks: Array<{
+    after_block: string;
+    block: WikiPageContent;
+  }>;
+  delete_blocks: string[];
+  replace_blocks: Array<{
+    target: string;
+    new_content: { markdown: string; mermaid?: string };
+    source_ids: string[];
+  }>;
+  insert_sources: WikiSource[];
+  delete_sources: string[];
+}
+
+// Wiki Index（由 build_wiki_index.py 生成）
+export interface WikiIndexOutlineItem {
+  id: string;
+  title: string;
+  level: number;
+}
+
+export interface WikiIndexPage {
+  page_path: string;
+  title: string;
+  summary: string;
+  intent_keywords: string[];
+  suggested_questions?: string[];
+  outline: WikiIndexOutlineItem[];
+  key_classes: string[];
+  block_count: number;
+  source_file_count: number;
+  has_mermaid: boolean;
+}
+
+export interface WikiIndex {
+  generated_at: string;
+  total_pages: number;
+  total_blocks: number;
+  total_source_files: number;
+  pages: WikiIndexPage[];
+  cross_references: {
+    classes: Record<string, string[]>;
+    source_files: Record<string, string[]>;
+  };
 }
 
 // Wiki 生成历史记录

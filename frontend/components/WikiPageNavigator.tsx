@@ -212,7 +212,6 @@ const WikiPageNavigator: React.FC<WikiPageNavigatorProps> = ({
   theme = notionTheme,
   isDarkMode = false
 }) => {
-  // 缓存 tree 结构，避免每次渲染都重新生成
   const tree = useMemo(() => buildPageTree(wikiPages), [wikiPages]);
   const [activeTab, setActiveTab] = useState<'pages' | 'structure'>('pages');
   const headings = extractHeadings(blocks);

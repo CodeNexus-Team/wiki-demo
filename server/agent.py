@@ -30,81 +30,207 @@ agent_logger.addHandler(_handler)
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "sonnet")  # claude CLI 支持: sonnet, opus, haiku
 CLAUDE_MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "4096"))  # 限制输出 token 数加速响应
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "15"))
-SOURCE_ROOT_PATH = os.environ.get("SOURCE_ROOT_PATH", "/Users/uinas/code/wiki-demo/wiki-demo/frontend/public/source-code/mall")
+SOURCE_ROOT_PATH = os.environ.get("SOURCE_ROOT_PATH", "")
 
 # 追踪本 agent 创建的所有 session_id，用于安全清理
 _owned_session_ids: set = set()
+
+# Wiki index 缓存：{abs_wiki_root: (mtime, index_dict)}
+_wiki_index_cache: Dict[str, tuple] = {}
+
+
+def _resolve_wiki_root(wiki_root: str) -> str:
+    """把 wiki_root 规范化为绝对路径"""
+    if os.path.isabs(wiki_root):
+        return wiki_root
+    return os.path.join(os.path.dirname(__file__), wiki_root)
+
+
+def _load_wiki_index(wiki_root: str) -> Optional[dict]:
+    """读取 wiki_root/.index/wiki_index.json，按 mtime 做内存缓存"""
+    abs_root = _resolve_wiki_root(wiki_root)
+    index_path = os.path.join(abs_root, ".index", "wiki_index.json")
+    if not os.path.isfile(index_path):
+        return None
+    try:
+        mtime = os.path.getmtime(index_path)
+        cached = _wiki_index_cache.get(abs_root)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        with open(index_path, "r", encoding="utf-8") as f:
+            index = json.load(f)
+        _wiki_index_cache[abs_root] = (mtime, index)
+        return index
+    except (OSError, json.JSONDecodeError) as e:
+        agent_logger.warning(f"加载 wiki_index 失败: {e}")
+        return None
+
+
+def _get_known_wiki_paths(wiki_root: str) -> set:
+    """从 wiki_index.json 获取所有已知的 wiki 页面路径（集合）。
+    复用 _load_wiki_index 的 mtime 缓存，不存在时返回空集合。
+    """
+    index = _load_wiki_index(wiki_root)
+    if not index or not isinstance(index, dict):
+        return set()
+    paths = set()
+    for p in index.get("pages", []):
+        if isinstance(p, dict) and p.get("path"):
+            paths.add(p["path"])
+    return paths
+
+
+def _linkify_wiki_paths(text: str, known_paths: set) -> str:
+    """
+    把回答文本里出现的 wiki 页面路径替换为 markdown 链接：
+      xxx/yyy/订单退货服务.json  →  [订单退货服务](wiki://xxx/yyy/订单退货服务.json)
+
+    规则：
+    - 只替换 known_paths 里真实存在的 path（避免误伤源码 .java 文件）
+    - 跳过已经在 markdown 链接 `[..](..)` 里的路径（幂等）
+    - 路径被 backtick 包裹 ``...`` 时，连同 backtick 一起替换为链接
+    - 按长度倒序匹配，避免短路径吃掉长路径的子串
+    """
+    if not text or not known_paths:
+        return text
+
+    # 收集已有 markdown 链接的 span，避免重复包装
+    linked_spans: List[tuple] = [(m.start(), m.end()) for m in re.finditer(r'\[[^\]]*\]\([^)]*\)', text)]
+
+    # 按长度倒序排序，优先长路径
+    sorted_paths = sorted(known_paths, key=len, reverse=True)
+
+    # 收集要替换的 span：(start, end, replacement)
+    replacements: List[tuple] = []
+    occupied: List[tuple] = []  # 已选中的 span，防止重叠
+
+    def _overlaps(s: int, e: int, spans: List[tuple]) -> bool:
+        return any(not (e <= x or s >= y) for x, y in spans)
+
+    for path in sorted_paths:
+        display = os.path.splitext(os.path.basename(path))[0]
+        link_md = f"[{display}](wiki://{path})"
+        escaped = re.escape(path)
+        # 两种匹配模式：带 backtick 包裹 / 裸 path
+        # 先处理 `path`（连 backtick 一起替换），再处理裸 path
+        for pat in (rf'`{escaped}`', escaped):
+            for m in re.finditer(pat, text):
+                start, end = m.span()
+                if _overlaps(start, end, linked_spans):
+                    continue
+                if _overlaps(start, end, occupied):
+                    continue
+                replacements.append((start, end, link_md))
+                occupied.append((start, end))
+
+    if not replacements:
+        return text
+
+    # 从后往前替换，避免位置偏移
+    replacements.sort(key=lambda r: r[0], reverse=True)
+    out = text
+    for start, end, rep in replacements:
+        out = out[:start] + rep + out[end:]
+    return out
+
+
+def _build_wiki_overview(index: dict, current_page: str) -> str:
+    """
+    把 wiki_index 格式化为 prompt 段落。
+    当前页用 ★ 标记，其余页面供模型按需通过 wiki-reader MCP 工具跳读。
+    """
+    pages = index.get("pages", []) if isinstance(index, dict) else []
+    if not pages:
+        return ""
+
+    current_norm = current_page.lstrip("/")
+    lines = []
+    for p in pages:
+        path = p.get("path", "")
+        if not path:
+            continue
+        summary = (p.get("summary") or "").replace("\n", " ").strip()
+        classes = p.get("classes") or []
+        marker = "★ " if path == current_norm else "  "
+        line = f"{marker}- {path} — {summary}"
+        if classes:
+            cls_preview = ", ".join(classes[:6])
+            if len(classes) > 6:
+                cls_preview += f" …(+{len(classes) - 6})"
+            line += f" [classes: {cls_preview}]"
+        lines.append(line)
+
+    header = (
+        "\n## Wiki 总览（全部页面，★ 为当前页）\n"
+        "若用户问题涉及当前页以外的内容，**先从下表挑 1~2 个最相关页面**，"
+        "然后调用 MCP 工具 `get_page_outline(path)` 查看结构、"
+        "`read_wiki_page(path)` 读取内容、"
+        "`read_wiki_section(path, section_id)` 精准读某段。\n"
+        "path 直接用下表中的相对路径（例如 `门户系统/订单管理.json`），无需拼绝对路径。\n"
+    )
+    return header + "\n".join(lines)
 
 # ==================== System Prompt ====================
 
 CLARIFICATION_PREFIX = "@@CLARIFY@@"
 QA_ANSWER_PREFIX = "@@QA_ANSWER@@"
+SUGGEST_EDIT_PREFIX = "@@SUGGEST_EDIT@@"
 
-SYSTEM_PROMPT = """你是 Wiki 文档助手。用户选中了一些内容块并提出了需求。
+# ==================== Prompt 段模板 ====================
+#
+# 设计：把两个大 system prompt 拆成独立段常量，按场景拼装。
+#   - 共享段（被两个路径复用）:CLARIFY_BASE / CROSS_PAGE / EDIT_PROTOCOL / CLARIFY_FOR_EDIT
+#   - QA 路径专属:QA_IDENTITY / QA_FORMAT_BASIC / SUGGEST_EDIT / EDIT_EXAMPLES
+#   - Detailed 路径专属:DETAILED_IDENTITY / INTENT_DETECTION / EDIT_WORKFLOW
+#
+# 拼装逻辑见本文件底部的 build_qa_system_prompt / build_detailed_system_prompt。
+# 纯问答场景下(无修改信号)QA 段只注入前四段,相比原版节省 ~66% 字数。
 
-## 核心原则
-- 禁止凭空编造内容。所有描述必须基于实际源码或 Neo4j 图谱数据
-- 你必须先通过工具查阅相关源码文件或 Neo4j 数据，确认事实后再撰写
-- 如果工具不可用或查不到数据，只能基于用户提供的已有 block 内容进行回答或润色改写，不得添加未经验证的技术细节
-- source_ids 中填写的 ID 必须来自页面已有的源码引用，或者你通过工具确认存在的文件
+# ---- 共享段 ----
 
-## 意图判断（最高优先级）
-收到用户输入后，你必须先判断用户的意图类型，再决定输出格式：
+PROMPT_CLARIFY_BASE = """## 澄清机制
+你有一个 `ask_user` 工具可以直接向用户提问。以下情况**必须**调用 `ask_user` 工具澄清,不要猜测用户意图,不要以普通文本形式提问:
 
-### 提问类
-特征：用户在询问、了解、追问关于选中内容的问题。例如包含"是什么"、"为什么"、"怎么"、"有哪些"、
-"解释"、"什么区别"、"如何实现"、"调用关系"等疑问表达，或者明显在追问某个事实/原理，而非要求修改内容。
-
-此时你的任务是**回答问题**，不要输出修改指令。
-工作流程：根据"关联源码路径"使用 Read/Grep 工具读取源码，基于事实回答。
-输出格式：
-@@QA_ANSWER@@
-（markdown 格式的回答，可引用源码片段，使用中文）
-
-### 修改类
-特征：用户要求修改、补充、删除、重写、优化内容，或包含"改成"、"加上"、"删掉"、"补充"、"重写"等动作指令。
-
-此时按照下方的修改工作流程和输出格式执行。
-
-### 模糊类
-如果无法判断是提问还是修改，使用 `ask_user` 工具向用户澄清。
-
-## 澄清机制
-你有一个 `ask_user` 工具可以直接向用户提问。以下情况**必须**调用 `ask_user` 工具澄清，不要猜测用户意图，不要以普通文本形式提问：
-- 用户指令仅包含"优化"、"改一下"、"调整"、"处理"、"修改"等笼统词汇，未说明具体方向或目标
-- 用户指令与选中的多个 block 关系不明确
+- 用户问题过于笼统("讲讲这个"、"介绍一下"、"优化一下"、"处理一下"),不清楚想了解/改动哪个方面
+- 用户指令涉及页面多个模块,不确定指的是哪个
 - 用户指令存在多种合理解读方式
-- 用户指令可以有多种执行方式，你不确定用户想要哪种
+- 用户指令可以有多种执行方式,你不确定用户想要哪种
 
-调用 `ask_user` 工具时的要求：
-- question: 清晰的问题描述，不要使用 block ID（如 [S73]），应使用内容标题或摘要指代
-- options: 提供 3~5 个可选方向，最后一个固定为"其他（请在输入框说明）"
-- multi_select: 当选项之间不互斥、用户可能想同时选多个时设为 true。
-  例如"你希望补充哪些内容？"（用户可能同时选"补充字段说明"和"补充调用链路"）。
-  确认修改方向等互斥选择时保持默认 false。
+调用 `ask_user` 时:
+- question: 清晰的问题描述,用内容标题或摘要指代 block,**绝不使用** S12/B34 这种内部 id(用户看不懂)
+- options: 提供 3~5 个可选方向,最后一个固定为"其他(请在输入框说明)"
+- multi_select: 当选项不互斥、用户可能想同时选多个时设为 true
 
-用户回答后，根据回答继续执行。
+用户回答后,根据回答继续执行。"""
 
-## 修改工作流程
-1. 阅读用户选中的内容和修改需求
-2. 根据"关联源码路径"信息，使用 Read 工具直接读取对应源码文件，获取准确的实现细节
-3. 如需进一步搜索相关代码，使用 Grep 在源码目录中搜索关键类名、方法名等
-4. 仅当需要查询跨模块调用链、继承关系等实体关系时，才使用 `query_neo4j` 工具查询 Neo4j 知识图谱
-5. 基于查到的事实数据输出修改指令
-6. 源码根目录在 {{SOURCE_ROOT_PATH}}
 
-## 修改输出格式
-修改指令可包含多个操作，每个操作用 === 分隔。
+PROMPT_CROSS_PAGE = """## 跨页查阅
+如果需求/问题涉及**当前页以外**的模块(例如当前是"订单管理"而用户提到"登录"),
+请先查看 prompt 中的「Wiki 总览」段落,从中挑选 1~2 个最相关的页面,然后使用
+ `wiki-reader` MCP 工具按相对路径读取:
+- `get_page_outline(path)` — 只返回结构大纲,快速定位
+- `read_wiki_page(path)` — 读取精简的 block 树(已去除 neo4j 元数据)
+- `read_wiki_section(path, section_id)` — 精准读取某个 block 及其子树
+- `list_wiki_pages(prefix)` — 按前缀列出可用页面
 
-每个操作的格式：
+path 直接使用总览表中的相对路径(如 `门户系统/订单管理.json`),不要拼绝对路径。
+仅在 wiki 无法满足时才去搜源码或查 Neo4j。不要盲目 Grep 所有源码。"""
+
+
+PROMPT_EDIT_PROTOCOL = """## 修改输出协议
+修改指令可包含多个操作,每个操作用 `===` 分隔。每个操作的格式:
+
+```
 ---
 action: replace 或 insert_after 或 delete
-target: 目标block的ID
-source_ids: 关联的源码ID，逗号分隔（可选）
+target: 目标 block 的 ID
+source_ids: 关联的源码 ID,逗号分隔(可选)
 ---
-修改后的 markdown 正文（delete 操作不需要正文）
+修改后的 markdown 正文(delete 操作不需要正文)
+```
 
-示例（两个操作）：
+示例(两个操作):
+```
 ---
 action: replace
 target: S74
@@ -118,75 +244,278 @@ target: S74
 source_ids: 3
 ---
 这是新增的补充段落...
+```
 
-## 格式规则
-- action 三选一：replace（替换目标block内容）、insert_after（在目标block后插入）、delete（删除目标block）
+格式规则:
+- action 三选一: replace(替换目标 block 内容)、insert_after(在目标 block 后插入)、delete(删除目标 block)
 - target 必须是页面中已有的 block ID
 - markdown 内容使用中文
-- 只输出修改指令，不要输出解释文字"""
+- 每轮修改建议最多 5 个操作,超过请改用自然语言在回答里描述建议"""
 
-QA_SYSTEM_PROMPT = """你是代码知识问答助手。用户正在浏览一份基于源码生成的 Wiki 文档，并对其中的内容或关联的源码提出问题。
+
+PROMPT_CLARIFY_FOR_EDIT = """## 修改目标澄清(重要)
+用户看到的是渲染后的 markdown 内容,**不知道** `S12` / `B34` 这种内部 block id。用户只能用:
+- **标题指代**:"把【订单创建流程】那段改一下"
+- **主题指代**:"把讲 JWT 的那段补充 refresh token 逻辑"
+- **摘要指代**:"把说订单状态有 5 种的那个表格改成 7 种"
+- **位置指代**(模糊):"上面那段"、"这段内容"、"刚才提到的"
+
+你的职责是从用户描述**反向推断 target**:读下方「当前页 block 清单」的每一行(含 title、预览、source_ids),通过语义匹配找到唯一 block,把 id 填入 target。
+
+以下情况**必须**调用 `ask_user` 工具澄清,绝不"蒙一个" target:
+- 位置指代模糊("上面那段"、"这段")→ 无法确定具体 block
+- 多个候选都符合(如页面有两段都讲某主题)
+- 完全找不到匹配(用户说的内容不在当前页)
+
+ask_user 的 options 里**用自然语言描述 block**(section 标题或内容摘要),不要使用 `[S12]` 之类的 id。"""
+
+
+# ---- QA 路径专属段 ----
+
+PROMPT_QA_IDENTITY = """你是代码知识问答助手。用户正在浏览一份基于源码生成的 Wiki 文档,对其中的内容或关联的源码提出问题。
 
 ## 核心原则
-- 回答必须基于实际源码或 Wiki 文档内容，禁止凭空编造
-- 优先使用 Read 工具读取源码文件获取准确信息，再用 Grep 搜索补充
-- 仅当需要查询跨模块关系时使用 query_neo4j
-- 如果无法通过工具获取信息，坦诚说明而非猜测
-
-## 澄清机制
-你有一个 `ask_user` 工具可以直接向用户提问。以下情况**必须**调用 `ask_user` 工具澄清，不要猜测用户意图，不要以普通文本形式提问：
-- 用户问题过于笼统（如"讲讲这个"、"介绍一下"），不清楚想了解哪个方面
-- 用户问题涉及页面中多个模块，不确定指的是哪个
-- 用户问题可以从多个角度回答（如架构层面 vs 实现细节 vs 业务逻辑）
-
-调用 `ask_user` 工具时的要求：
-- question: 清晰的问题描述
-- options: 提供 3~5 个可选方向，最后一个固定为"其他（请在输入框说明）"
-- multi_select: 当选项不互斥时设为 true
-
-用户回答后，根据回答继续执行。
+- 回答必须基于实际源码或 Wiki 文档内容,禁止凭空编造
+- 优先使用 Read 工具读取源码文件获取准确信息,再用 Grep 搜索补充
+- 仅当需要查询跨模块关系时使用 `query_neo4j`
+- 如果无法通过工具获取信息,坦诚说明而非猜测
 
 ## 工作流程
-1. 理解用户的问题，结合提供的 Wiki 页面内容和结构
-2. 根据"关联源码路径"信息，使用 Read 工具读取对应源码
-3. 如需搜索更多代码，使用 Grep 搜索
-4. 基于事实给出清晰、准确的回答
-5. 源码根目录在 {{SOURCE_ROOT_PATH}}
+1. 理解用户的问题,结合提供的 Wiki 页面内容和结构
+2. 如果问题涉及当前页以外的模块,按「跨页查阅」段指引使用 wiki-reader 工具
+3. 根据"关联源码路径"使用 Read 工具读取对应源码
+4. 如需搜索更多代码,使用 Grep
+5. 基于事实给出清晰、准确的回答
+6. 源码根目录在 {{SOURCE_ROOT_PATH}}"""
 
-## 输出格式
-- 使用中文回答
-- 用 markdown 格式组织回答
-- 适当引用源码片段说明问题
-- 回答要简洁明了，直击问题核心"""
+
+PROMPT_QA_FORMAT_BASIC = """## 输出格式(必须严格遵守)
+回答必须以 `@@QA_ANSWER@@` 开头(作为响应的第一行),后接 markdown 正文:
+
+```
+@@QA_ANSWER@@
+(markdown 格式的回答,可引用源码片段,使用中文)
+```
+
+- 简洁明了,直击问题核心
+- 适当引用源码片段
+- 当提到具体 wiki 页面的相对路径时(例如 `门户系统/主程序/订单退货服务.json`),直接写路径即可,后端会自动识别并生成可点击链接"""
+
+
+PROMPT_SUGGEST_EDIT = """## 可选的修改建议(严格条件触发)
+在回答用户问题后,**仅当满足以下任一条件**时,可以在回答末尾追加一段修改建议,用 `@@SUGGEST_EDIT@@` 作为分隔标记:
+
+1. **用户明确或隐含要求修改** — 问题里出现"改一下/补充/删掉/优化/这里写错了/应该是…"等动作性表达
+2. **事实性冲突** — 你通过 Read 工具读取源码后,发现当前 wiki 页面的某个 block 的描述**与实际源码不一致**(例如方法签名变了、字段被删了、描述已过时)
+
+**不满足触发条件时,不得追加修改建议**。特别是:
+- ❌ 不得因为"可以写得更详细"、"结构可以更清晰"、"缺少示例"等**主观判断**触发修改
+- ❌ 不得仅因为用户问到某个话题就"顺手"改一下
+- ❌ 不得无中生有添加 wiki 中没有、源码也未体现的内容
+- ❌ 不得在匹配不到 target 时"蒙一个"填上,必须走 `ask_user` 澄清
+
+触发时的完整输出格式:
+
+```
+@@QA_ANSWER@@
+(先完整回答用户问题)
+
+@@SUGGEST_EDIT@@
+---
+action: replace | insert_after | delete
+target: 目标 block 的 ID(必须是当前页「block 清单」里真实存在的 id)
+source_ids: 关联源码 ID,逗号分隔(可选)
+---
+修改后的 markdown 正文
+===
+---
+action: ...
+...
+```
+
+修改协议与 target 的规则见「修改输出协议」和「修改目标澄清」两段。"""
+
+
+PROMPT_EDIT_EXAMPLES = """## 修改建议判断示例
+
+| 用户问题 | 触发 SUGGEST_EDIT? | 理由 |
+|---|---|---|
+| "订单提交的入口是什么?" | ❌ | 纯提问 |
+| "帮我把【订单创建流程】那段改简洁点" | ✅ | 明确要求 + 标题指代,可定位 target |
+| "把讲 JWT 的那段补充 refresh token 逻辑" | ✅ | 明确要求 + 主题指代,可定位 target |
+| "这段内容改一下" | ❌ → 调 ask_user | 模糊指代,必须澄清 |
+| "订单状态那里写错了,源码里是 7 种" | ✅ | 事实性冲突(前提是你读过源码确认) |
+| "这个模块的架构能写得再详细点吗?" | ❌ | 主观判断 |
+| "登录流程有 JWT 吗?" | ❌ | 纯提问,即使发现 wiki 描述可改善也不触发 |
+| "把所有提到 OrderService 的地方都补充调用链" | ❌ → 调 ask_user | 规模过大且目标不唯一,先澄清 |"""
+
+
+# ---- Detailed 路径专属段 ----
+
+PROMPT_DETAILED_IDENTITY = """你是 Wiki 文档助手。用户选中了一些内容块并提出了需求。
+
+## 核心原则
+- 禁止凭空编造内容。所有描述必须基于实际源码或 Neo4j 图谱数据
+- 你必须先通过工具查阅相关源码文件或 Neo4j 数据,确认事实后再撰写
+- 如果工具不可用或查不到数据,只能基于用户提供的已有 block 内容进行回答或润色改写,不得添加未经验证的技术细节
+- source_ids 中填写的 ID 必须来自页面已有的源码引用,或者你通过工具确认存在的文件"""
+
+
+PROMPT_INTENT_DETECTION = """## 意图判断(最高优先级)
+收到用户输入后,先判断意图类型,再决定输出格式:
+
+### 提问类
+特征:用户在询问、了解、追问。例如"是什么"、"为什么"、"怎么"、"有哪些"、"解释"、"什么区别"、"如何实现"、"调用关系"等疑问表达,或明显在追问某个事实/原理,而非要求修改内容。
+
+此时输出格式:
+```
+@@QA_ANSWER@@
+(markdown 格式的回答,可引用源码片段,使用中文)
+```
+
+### 修改类
+特征:用户要求修改、补充、删除、重写、优化内容,或包含"改成"、"加上"、"删掉"、"补充"、"重写"等动作指令。
+
+此时按「修改工作流程」和「修改输出协议」执行,直接输出修改指令,不加 `@@QA_ANSWER@@` 前缀。
+
+### 模糊类
+如果无法判断是提问还是修改,调用 `ask_user` 工具澄清。"""
+
+
+PROMPT_EDIT_WORKFLOW = """## 修改工作流程
+1. 阅读用户选中的内容和修改需求
+2. 根据"关联源码路径"信息,使用 Read 工具直接读取对应源码文件,获取准确的实现细节
+3. 如需进一步搜索相关代码,使用 Grep 在源码目录中搜索关键类名、方法名等
+4. 仅当需要查询跨模块调用链、继承关系等实体关系时,才使用 `query_neo4j` 工具查询 Neo4j 知识图谱
+5. 基于查到的事实数据输出修改指令
+6. 源码根目录在 {{SOURCE_ROOT_PATH}}
+7. 只输出修改指令,不要输出解释文字"""
+
+
+# ==================== Prompt 拼装 ====================
+
+# 用户输入含以下任一词时,QA 路径会注入 SUGGEST_EDIT 相关段
+EDIT_SIGNAL_WORDS = (
+    # 直接动作词
+    "改一下", "改成", "改为", "改得", "改写",
+    "修改", "调整", "重写", "完善", "优化", "扩充", "扩展",
+    "删掉", "删除", "去掉",
+    "补充", "添加", "加上", "加入",
+    # 事实性指错
+    "写错", "错了", "应该是", "有误",
+    "不对", "不正确",
+    # 主观评价(弱信号但通常暗示修改)
+    "太啰嗦", "太长", "太短", "不够详细", "不够清晰",
+)
+
+
+def _should_allow_suggest_edit(user_query: str) -> bool:
+    """判断 user_query 是否含修改信号词,决定是否注入 SUGGEST_EDIT 相关 prompt 段"""
+    if not user_query:
+        return False
+    return any(w in user_query for w in EDIT_SIGNAL_WORDS)
+
+
+def build_qa_system_prompt(allow_suggest_edit: bool) -> tuple:
+    """
+    拼装 QA 路径的 system prompt。
+    返回 (prompt_text, segment_names) 用于日志。
+    """
+    parts = [
+        ("QA_IDENTITY", PROMPT_QA_IDENTITY),
+        ("CLARIFY_BASE", PROMPT_CLARIFY_BASE),
+        ("CROSS_PAGE", PROMPT_CROSS_PAGE),
+        ("QA_FORMAT_BASIC", PROMPT_QA_FORMAT_BASIC),
+    ]
+    if allow_suggest_edit:
+        parts += [
+            ("SUGGEST_EDIT", PROMPT_SUGGEST_EDIT),
+            ("EDIT_PROTOCOL", PROMPT_EDIT_PROTOCOL),
+            ("CLARIFY_FOR_EDIT", PROMPT_CLARIFY_FOR_EDIT),
+            ("EDIT_EXAMPLES", PROMPT_EDIT_EXAMPLES),
+        ]
+    text = "\n\n".join(p[1] for p in parts)
+    names = [p[0] for p in parts]
+    return text, names
+
+
+def build_detailed_system_prompt() -> tuple:
+    """
+    拼装 detailedQuery 路径的 system prompt。
+    detailedQuery 有选中 block,必然要修改协议,全量注入。
+    """
+    parts = [
+        ("DETAILED_IDENTITY", PROMPT_DETAILED_IDENTITY),
+        ("INTENT_DETECTION", PROMPT_INTENT_DETECTION),
+        ("CLARIFY_BASE", PROMPT_CLARIFY_BASE),
+        ("CROSS_PAGE", PROMPT_CROSS_PAGE),
+        ("CLARIFY_FOR_EDIT", PROMPT_CLARIFY_FOR_EDIT),
+        ("EDIT_WORKFLOW", PROMPT_EDIT_WORKFLOW),
+        ("EDIT_PROTOCOL", PROMPT_EDIT_PROTOCOL),
+    ]
+    text = "\n\n".join(p[1] for p in parts)
+    names = [p[0] for p in parts]
+    return text, names
+
 
 # ==================== MCP Server 配置 ====================
 
 NEO4J_MCP_SERVER_PATH = os.path.join(os.path.dirname(__file__), "neo4j_mcp_server.py")
 ASK_USER_MCP_SERVER_PATH = os.path.join(os.path.dirname(__file__), "ask_user_mcp_server.py")
+WIKI_READER_MCP_SERVER_PATH = os.path.join(os.path.dirname(__file__), "wiki_reader_mcp_server.py")
 ASK_USER_COMM_DIR = os.path.join(tempfile.gettempdir(), "ask_user_comm")
 os.makedirs(ASK_USER_COMM_DIR, exist_ok=True)
 
-def _build_mcp_config() -> str:
-    """生成临时 MCP 配置文件，返回文件路径"""
-    config = {
-        "mcpServers": {
-            "neo4j-knowledge-graph": {
-                "command": "python",
-                "args": [NEO4J_MCP_SERVER_PATH]
-            },
-            "ask-user": {
-                "command": "python",
-                "args": [ASK_USER_MCP_SERVER_PATH],
-                "env": {
-                    "ASK_USER_COMM_DIR": ASK_USER_COMM_DIR
-                }
+# Claude CLI 允许的工具白名单（显式）
+# 内置工具：Read/Grep/Glob 用于读源码，禁用 Edit/Write/Bash 防止模型绕过修改协议
+# MCP 工具：neo4j/ask_user/wiki-reader 三个领域封装
+ALLOWED_TOOLS = ",".join([
+    "Read",
+    "Grep",
+    "Glob",
+    "mcp__neo4j-knowledge-graph__query_neo4j",
+    "mcp__ask-user__ask_user",
+    "mcp__wiki-reader__read_wiki_page",
+    "mcp__wiki-reader__get_page_outline",
+    "mcp__wiki-reader__read_wiki_section",
+    "mcp__wiki-reader__list_wiki_pages",
+])
+
+
+def _build_mcp_config(wiki_root: Optional[str] = None) -> str:
+    """生成临时 MCP 配置文件，返回文件路径。
+
+    Args:
+        wiki_root: 可选，wiki 目录绝对路径。若提供则注册 wiki-reader MCP server。
+    """
+    servers = {
+        "neo4j-knowledge-graph": {
+            "command": "python",
+            "args": [NEO4J_MCP_SERVER_PATH]
+        },
+        "ask-user": {
+            "command": "python",
+            "args": [ASK_USER_MCP_SERVER_PATH],
+            "env": {
+                "ASK_USER_COMM_DIR": ASK_USER_COMM_DIR
             }
         }
     }
+    if wiki_root:
+        abs_wiki_root = _resolve_wiki_root(wiki_root)
+        servers["wiki-reader"] = {
+            "command": "python",
+            "args": [WIKI_READER_MCP_SERVER_PATH],
+            "env": {
+                "WIKI_ROOT_PATH": abs_wiki_root
+            }
+        }
+
+    config = {"mcpServers": servers}
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, prefix='mcp_config_')
     json.dump(config, tmp, ensure_ascii=False)
     tmp.close()
-    agent_logger.info(f"MCP 配置文件: {tmp.name}")
+    agent_logger.info(f"MCP 配置文件: {tmp.name} (wiki_root={'yes' if wiki_root else 'no'})")
     return tmp.name
 
 
@@ -314,25 +643,11 @@ def split_markdown_segments(markdown: str) -> list:
     return segments
 
 
-def parse_agent_output(raw_text: str) -> dict:
+def _parse_edit_operations(raw_text: str) -> dict:
     """
-    解析模型输出的精简修改指令，转换为 PageDiffResponse 格式。
-    如果模型输出以 @@QA_ANSWER@@ 开头，则返回 QA 回答结果。
-
-    模型输出格式：
-    ---
-    action: replace|insert_after|delete
-    target: block_id
-    source_ids: 1, 2（可选）
-    ---
-    markdown 正文
-    ===（多个操作的分隔符）
+    解析 ---/=== 修改指令文本，返回 PageDiffResponse 字段。
+    抽离自旧版 parse_agent_output，供 detailedQuery / qaQuery 两种路径复用。
     """
-    # 检测 QA 回答
-    text = raw_text.strip()
-    if text.startswith(QA_ANSWER_PREFIX):
-        answer = text[len(QA_ANSWER_PREFIX):].strip()
-        return {"qa_answer": answer}
     insert_blocks = []
     delete_blocks = []
     replace_blocks = []
@@ -450,6 +765,130 @@ def parse_agent_output(raw_text: str) -> dict:
         "insert_sources": insert_sources,
         "delete_sources": [],
     }
+
+
+def _empty_edit_result() -> dict:
+    """用于"无修改"的占位返回"""
+    return {
+        "insert_blocks": [],
+        "delete_blocks": [],
+        "replace_blocks": [],
+        "insert_sources": [],
+        "delete_sources": [],
+    }
+
+
+def parse_agent_output(raw_text: str) -> dict:
+    """
+    解析模型输出：
+
+    1. 首字符若为 @@QA_ANSWER@@ → QA 路径：
+       - 若同时包含 @@SUGGEST_EDIT@@ → 切分两段，返回 {"qa_answer": ..., 修改字段...}
+       - 否则只返回 {"qa_answer": ...}
+
+    2. 否则 → 修改路径（SYSTEM_PROMPT 的修改协议），走 _parse_edit_operations
+    """
+    text = raw_text.strip()
+
+    # -------- QA 路径（含可选的 SUGGEST_EDIT）--------
+    if text.startswith(QA_ANSWER_PREFIX):
+        body = text[len(QA_ANSWER_PREFIX):]
+        if SUGGEST_EDIT_PREFIX in body:
+            qa_part, _, edit_part = body.partition(SUGGEST_EDIT_PREFIX)
+            edit_result = _parse_edit_operations(edit_part.strip())
+            return {"qa_answer": qa_part.strip(), **edit_result}
+        return {"qa_answer": body.strip(), **_empty_edit_result()}
+
+    # -------- 纯修改路径（detailedQuery 场景）--------
+    return _parse_edit_operations(text)
+
+
+def collect_all_block_ids(blocks: list) -> set:
+    """递归收集所有 block 的 id（含 section），用于 target 合法性校验"""
+    ids: set = set()
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        bid = block.get("id")
+        if bid:
+            ids.add(bid)
+        children = block.get("content")
+        if isinstance(children, list):
+            ids |= collect_all_block_ids(children)
+    return ids
+
+
+def validate_edit_targets(result: dict, valid_ids: set) -> tuple:
+    """
+    过滤掉 target 不在 valid_ids 里的修改操作。
+    返回 (过滤后 result, 丢弃的操作数)。
+    """
+    discarded = 0
+
+    def _keep_target(target: str) -> bool:
+        nonlocal discarded
+        if target in valid_ids:
+            return True
+        discarded += 1
+        agent_logger.warning(f"丢弃非法 target 修改操作: target={target} 不在当前页 block id 集合中")
+        return False
+
+    new_replace = [op for op in result.get("replace_blocks", []) if _keep_target(op.get("target", ""))]
+    new_delete = [tid for tid in result.get("delete_blocks", []) if _keep_target(tid)]
+    # insert_after 的 after_block 也可能是 target，但新建 block 的 NEW_N 是合法的
+    new_insert = [
+        op for op in result.get("insert_blocks", [])
+        if op.get("after_block", "").startswith("NEW_") or _keep_target(op.get("after_block", ""))
+    ]
+
+    filtered = {
+        **result,
+        "replace_blocks": new_replace,
+        "delete_blocks": new_delete,
+        "insert_blocks": new_insert,
+    }
+    return filtered, discarded
+
+
+def has_any_edit(result: dict) -> bool:
+    """判断 result 是否包含至少一个真实的修改操作"""
+    return bool(
+        result.get("insert_blocks")
+        or result.get("delete_blocks")
+        or result.get("replace_blocks")
+    )
+
+
+def build_block_inventory(blocks: list, depth: int = 0, lines: Optional[list] = None) -> list:
+    """
+    生成 qa_query 用的"全页 block 清单"：每个 block 一行，含 id + type + 前 80 字预览 + source_ids。
+    供纯问答模式下模型自主判断 target 使用。
+    """
+    if lines is None:
+        lines = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        indent = "  " * depth
+        bid = block.get("id", "?")
+        btype = block.get("type", "")
+        sids = block.get("source_id") or []
+        sids_str = f", sources={sids}" if sids else ""
+
+        if btype == "section":
+            title = (block.get("title") or "").replace("\n", " ").strip()
+            lines.append(f"{indent}- [{bid}] section: {title[:80]}{sids_str}")
+            children = block.get("content")
+            if isinstance(children, list):
+                build_block_inventory(children, depth + 1, lines)
+        else:
+            content = block.get("content")
+            md = content.get("markdown", "") if isinstance(content, dict) else ""
+            preview = md[:80].replace("\n", " ")
+            if len(md) > 80:
+                preview += "..."
+            lines.append(f"{indent}- [{bid}] {btype}: {preview}{sids_str}")
+    return lines
 
 
 def build_page_outline(blocks: list, depth: int = 0) -> str:
@@ -570,6 +1009,18 @@ async def _run_claude_streaming(
                                 on_progress(f"正在搜索代码: {tool_input.get('pattern', '')[:40]}")
                             elif "neo4j" in tool_name.lower():
                                 on_progress("正在查询知识图谱...")
+                            elif "wiki-reader" in tool_name or "wiki_reader" in tool_name:
+                                wiki_path = tool_input.get("path", "")
+                                short = wiki_path.split("/")[-1] if wiki_path else "页面"
+                                if "outline" in tool_name:
+                                    on_progress(f"正在查看 wiki 大纲: {short}")
+                                elif "section" in tool_name:
+                                    sid = tool_input.get("section_id", "")
+                                    on_progress(f"正在读取 wiki 片段: {short}#{sid}")
+                                elif "list" in tool_name:
+                                    on_progress("正在列出 wiki 页面...")
+                                else:
+                                    on_progress(f"正在查阅 wiki 页面: {short}")
                             else:
                                 on_progress(f"正在使用工具: {tool_name}")
                     elif block_type == "text":
@@ -691,8 +1142,8 @@ async def run_detailed_query(
             "-p", user_query,
             "--output-format", "stream-json",
             "--verbose",
-            "--mcp-config", _build_mcp_config(),
-            "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j,mcp__ask-user__ask_user",
+            "--mcp-config", _build_mcp_config(wiki_root),
+            "--allowedTools", ALLOWED_TOOLS,
         ]
 
         agent_text, _ = await _run_claude_streaming(
@@ -706,6 +1157,11 @@ async def run_detailed_query(
 
         _progress("AI 分析完成，正在解析结果...")
         result = parse_agent_output(agent_text)
+        # 对 qa_answer 文本做 wiki 路径链接化
+        if "qa_answer" in result and result["qa_answer"]:
+            result["qa_answer"] = _linkify_wiki_paths(
+                result["qa_answer"], _get_known_wiki_paths(wiki_root)
+            )
         result["session_id"] = resume_session_id  # 保持同一会话链
         t_end = time.time()
         agent_logger.info(f"恢复完成: 总耗时={t_end - t_start:.2f}s")
@@ -766,11 +1222,18 @@ async def run_detailed_query(
             source_context += f"\n\n源码根目录: {SOURCE_ROOT_PATH or '(未配置)'}"
             source_context += "\n如需查询跨模块关系，可用 `query_neo4j`: `MATCH (n)-[r]-(m) WHERE id(n) = <neo4j_id> RETURN type(r), m.name`"
 
-    # 6. 构建精简 prompt
-    system_prompt = SYSTEM_PROMPT.replace("{{SOURCE_ROOT_PATH}}", SOURCE_ROOT_PATH or "(未配置)")
-    prompt = f"""{system_prompt}
+    # 6. 构建精简 prompt（拼装 detailed 路径段集合）
+    system_prompt_raw, segment_names = build_detailed_system_prompt()
+    system_prompt = system_prompt_raw.replace("{{SOURCE_ROOT_PATH}}", SOURCE_ROOT_PATH or "(未配置)")
+    agent_logger.info(f"[Detailed] prompt 段: {'+'.join(segment_names)}, system_prompt 字符={len(system_prompt)}")
 
-## 页面结构概览
+    wiki_index = _load_wiki_index(wiki_root)
+    wiki_overview = _build_wiki_overview(wiki_index, page_path) if wiki_index else ""
+
+    prompt = f"""{system_prompt}
+{wiki_overview}
+
+## 当前页面结构概览
 {outline}
 
 ## 用户选中的内容
@@ -791,8 +1254,8 @@ async def run_detailed_query(
         "--model", CLAUDE_MODEL,
         "--output-format", "stream-json",
         "--verbose",
-        "--mcp-config", _build_mcp_config(),
-        "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j,mcp__ask-user__ask_user",
+        "--mcp-config", _build_mcp_config(wiki_root),
+        "--allowedTools", ALLOWED_TOOLS,
     ]
 
     agent_text, session_id = await _run_claude_streaming(
@@ -811,6 +1274,11 @@ async def run_detailed_query(
     # 9. 解析模型输出 → PageDiffResponse 或 QA 回答
     _progress("AI 分析完成，正在解析结果...")
     result = parse_agent_output(agent_text)
+    # 对 qa_answer 文本做 wiki 路径链接化
+    if "qa_answer" in result and result["qa_answer"]:
+        result["qa_answer"] = _linkify_wiki_paths(
+            result["qa_answer"], _get_known_wiki_paths(wiki_root)
+        )
     result["session_id"] = session_id  # 供后续追问 --resume
 
     t_end = time.time()
@@ -823,6 +1291,48 @@ async def run_detailed_query(
                           f"CLI耗时={cli_duration:.2f}s, 总耗时={total_duration:.2f}s")
     agent_logger.info("=" * 60)
     return result
+
+
+def _qa_build_return(
+    parsed: dict,
+    raw_agent_text: str,
+    session_id: Optional[str],
+    known_wiki_paths: Optional[set] = None,
+) -> dict:
+    """
+    统一 QA 路径的返回结构。兼容两种情况：
+    1. 模型正确输出 `@@QA_ANSWER@@` 前缀 → parsed 含 qa_answer
+    2. 模型忘了前缀或是旧 session → 退化为把 raw 文本当回答
+
+    最终返回保持和 run_detailed_query 对齐的 schema：
+      - answer: str            主回答（给前端展示）
+      - qa_answer: str         同 answer（和 SYSTEM_PROMPT 路径保持字段兼容）
+      - insert_blocks / delete_blocks / replace_blocks / insert_sources / delete_sources
+      - session_id: str | None
+
+    如果提供了 known_wiki_paths，会对 answer 做 linkify，把裸 wiki 路径替换为 markdown 链接。
+    """
+    if "qa_answer" in parsed:
+        answer_text = parsed["qa_answer"]
+    else:
+        # 模型没有按协议输出前缀（可能是旧 session resume）。降级：整段当回答，不当修改指令。
+        # 注意 parsed 里可能已经解析出 insert/delete/replace，但 target 校验会过滤掉非法的。
+        answer_text = raw_agent_text.strip()
+
+    # 对答案做 wiki 路径硬编码链接化
+    if known_wiki_paths:
+        answer_text = _linkify_wiki_paths(answer_text, known_wiki_paths)
+
+    return {
+        "answer": answer_text,
+        "qa_answer": answer_text,
+        "insert_blocks": parsed.get("insert_blocks", []),
+        "delete_blocks": parsed.get("delete_blocks", []),
+        "replace_blocks": parsed.get("replace_blocks", []),
+        "insert_sources": parsed.get("insert_sources", []),
+        "delete_sources": parsed.get("delete_sources", []),
+        "session_id": session_id,
+    }
 
 
 async def run_qa_query(
@@ -864,18 +1374,46 @@ async def run_qa_query(
             "-p", user_query,
             "--output-format", "stream-json",
             "--verbose",
-            "--mcp-config", _build_mcp_config(),
-            "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j,mcp__ask-user__ask_user",
+            "--mcp-config", _build_mcp_config(wiki_root),
+            "--allowedTools", ALLOWED_TOOLS,
         ]
 
         agent_text, _ = await _run_claude_streaming(
             cli_cmd, SOURCE_ROOT_PATH or None, on_progress, on_clarify
         )
 
+        # 解析（可能含 QA + 可选 SUGGEST_EDIT）
+        parsed = parse_agent_output(agent_text)
+
+        # target 校验（需要重新加载当前页面收集 id）
+        if has_any_edit(parsed):
+            try:
+                page_path_clean = page_path.lstrip("/")
+                json_path_r = (
+                    os.path.join(wiki_root, page_path_clean)
+                    if os.path.isabs(wiki_root)
+                    else os.path.join(os.path.dirname(__file__), wiki_root, page_path_clean)
+                )
+                with open(json_path_r, 'r', encoding='utf-8') as f:
+                    page_data_r = json.load(f)
+                valid_ids = collect_all_block_ids(page_data_r.get("markdown_content", []))
+                parsed, discarded = validate_edit_targets(parsed, valid_ids)
+                if discarded:
+                    agent_logger.warning(f"[QA resume] 丢弃 {discarded} 个非法 target 操作")
+            except Exception as e:
+                agent_logger.error(f"[QA resume] target 校验加载页面失败: {e}")
+
+        result = _qa_build_return(
+            parsed, agent_text, resume_session_id,
+            known_wiki_paths=_get_known_wiki_paths(wiki_root),
+        )
         t_end = time.time()
-        agent_logger.info(f"[QA] 恢复完成: 回答长度={len(agent_text)}, 耗时={t_end - t_start:.2f}s")
+        agent_logger.info(
+            f"[QA] 恢复完成: 回答长度={len(result.get('answer', ''))}, "
+            f"含修改建议={has_any_edit(result)}, 耗时={t_end - t_start:.2f}s"
+        )
         agent_logger.info("=" * 60)
-        return {"answer": agent_text, "session_id": resume_session_id}
+        return result
 
     # ---- 正常模式 ----
     agent_logger.info(f"[QA] 新请求: page_path={page_path}, user_query={user_query}")
@@ -896,8 +1434,10 @@ async def run_qa_query(
 
     page_content = page_data.get("markdown_content", [])
 
-    # 2. 构建页面概览和全文摘要
+    # 2. 构建页面结构 + 全页 block 清单（后者供自主修改使用）
     outline = build_page_outline(page_content)
+    block_inventory = "\n".join(build_block_inventory(page_content))
+    valid_block_ids = collect_all_block_ids(page_content)
 
     # 3. 提取全页面 neo4j 信息用于关联源码
     all_neo4j_info = {}
@@ -916,12 +1456,26 @@ async def run_qa_query(
             source_context = "\n## 关联源码路径\n以下是本页面关联的源码文件，可按需读取：\n" + "\n".join(source_lines)
             source_context += f"\n\n源码根目录: {SOURCE_ROOT_PATH or '(未配置)'}"
 
-    # 4. 构建 prompt
-    system_prompt = QA_SYSTEM_PROMPT.replace("{{SOURCE_ROOT_PATH}}", SOURCE_ROOT_PATH or "(未配置)")
-    prompt = f"""{system_prompt}
+    # 4. 构建 prompt（按 user_query 是否含修改信号决定是否注入 SUGGEST_EDIT 相关段）
+    allow_suggest_edit = _should_allow_suggest_edit(user_query)
+    system_prompt_raw, segment_names = build_qa_system_prompt(allow_suggest_edit)
+    system_prompt = system_prompt_raw.replace("{{SOURCE_ROOT_PATH}}", SOURCE_ROOT_PATH or "(未配置)")
+    agent_logger.info(
+        f"[QA] prompt 段: {'+'.join(segment_names)}, "
+        f"allow_suggest_edit={allow_suggest_edit}, system_prompt 字符={len(system_prompt)}"
+    )
 
-## 当前 Wiki 页面结构
+    wiki_index = _load_wiki_index(wiki_root)
+    wiki_overview = _build_wiki_overview(wiki_index, page_path) if wiki_index else ""
+
+    prompt = f"""{system_prompt}
+{wiki_overview}
+
+## 当前 Wiki 页面结构（outline）
 {outline}
+
+## 当前页 block 清单（可作为 SUGGEST_EDIT 的 target，id 必须从此列表选取）
+{block_inventory}
 {source_context}
 
 ## 用户问题
@@ -937,18 +1491,37 @@ async def run_qa_query(
         "--model", CLAUDE_MODEL,
         "--output-format", "stream-json",
         "--verbose",
-        "--mcp-config", _build_mcp_config(),
-        "--allowedTools", "mcp__neo4j-knowledge-graph__query_neo4j,mcp__ask-user__ask_user",
+        "--mcp-config", _build_mcp_config(wiki_root),
+        "--allowedTools", ALLOWED_TOOLS,
     ]
 
     agent_text, session_id = await _run_claude_streaming(
         cli_cmd, SOURCE_ROOT_PATH or None, on_progress, on_clarify
     )
 
+    # 6. 解析（含可选 SUGGEST_EDIT）+ target 校验
+    parsed = parse_agent_output(agent_text)
+    if has_any_edit(parsed):
+        parsed, discarded = validate_edit_targets(parsed, valid_block_ids)
+        if discarded:
+            agent_logger.warning(f"[QA] 丢弃 {discarded} 个非法 target 操作")
+
+    result = _qa_build_return(
+        parsed, agent_text, session_id,
+        known_wiki_paths=_get_known_wiki_paths(wiki_root),
+    )
+
     t_end = time.time()
-    agent_logger.info(f"[QA] 完成: 回答长度={len(agent_text)}, session_id={session_id}, 耗时={t_end - t_start:.2f}s")
+    agent_logger.info(
+        f"[QA] 完成: answer_len={len(result.get('answer', ''))}, "
+        f"含修改建议={has_any_edit(result)}, "
+        f"insert={len(result.get('insert_blocks', []))}, "
+        f"delete={len(result.get('delete_blocks', []))}, "
+        f"replace={len(result.get('replace_blocks', []))}, "
+        f"session_id={session_id}, 耗时={t_end - t_start:.2f}s"
+    )
     agent_logger.info("=" * 60)
-    return {"answer": agent_text, "session_id": session_id}
+    return result
 
 
 # ==================== Session 清理 ====================

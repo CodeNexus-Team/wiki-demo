@@ -11,12 +11,39 @@ interface WikiBrowserProps {
   onOpenWikiPage: (pagePath: string, allPages: string[]) => void;
 }
 
+// 总揽页面的常见命名（用于优先打开）
+const OVERVIEW_PAGE_NAMES = ['总揽', '总览', 'overview', 'index', 'README'];
+
+/**
+ * 在 wiki 页面列表中找到最适合作为入口的"总揽"页面：
+ * 1. 文件名（去扩展名后）匹配常见总揽名称
+ * 2. 文件路径深度最浅（根目录优先）
+ * 否则返回第一个页面。
+ */
+function findOverviewPage(pages: string[]): string {
+  if (pages.length === 0) return '';
+
+  // 优先匹配名称
+  for (const name of OVERVIEW_PAGE_NAMES) {
+    const matched = pages.find(p => {
+      const fileName = p.split('/').pop()?.replace(/\.json$/, '') || '';
+      return fileName.toLowerCase() === name.toLowerCase();
+    });
+    if (matched) return matched;
+  }
+
+  // 退化：返回路径最浅的页面
+  return pages.slice().sort((a, b) =>
+    a.split('/').length - b.split('/').length
+  )[0];
+}
+
 const WikiBrowser: React.FC<WikiBrowserProps> = ({ isDarkMode = false, onOpenWikiPage }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // 点击"生成Wiki"：扫描目录，拿到页面列表后直接跳转
+  // 点击"生成Wiki"：扫描目录，找到总揽页直接打开
   const handleGenerate = useCallback(async () => {
     if (isGenerating) return;
     setIsGenerating(true);
@@ -35,8 +62,8 @@ const WikiBrowser: React.FC<WikiBrowserProps> = ({ isDarkMode = false, onOpenWik
 
       setGenerationStatus(`扫描完成！共 ${result.wiki_pages.length} 个页面，正在加载...`);
 
-      // 直接跳转到第一个页面
-      onOpenWikiPage(result.wiki_pages[0], result.wiki_pages);
+      const initialPage = findOverviewPage(result.wiki_pages);
+      onOpenWikiPage(initialPage, result.wiki_pages);
     } catch (e) {
       setError(e instanceof Error ? e.message : '生成失败');
       setGenerationStatus(null);
@@ -79,7 +106,6 @@ const WikiBrowser: React.FC<WikiBrowserProps> = ({ isDarkMode = false, onOpenWik
           {isGenerating ? '生成中...' : '生成 Wiki'}
         </button>
 
-        {/* 状态提示 */}
         {generationStatus && (
           <div className={`mt-4 flex items-center justify-center gap-2 text-[13px] ${isDarkMode ? 'text-[#7d8590]' : 'text-[#86868b]'}`}>
             {isGenerating && <Loader2 size={14} className="animate-spin" />}
@@ -87,7 +113,6 @@ const WikiBrowser: React.FC<WikiBrowserProps> = ({ isDarkMode = false, onOpenWik
           </div>
         )}
 
-        {/* 错误提示 */}
         {error && (
           <div className={`mt-4 text-[13px] ${isDarkMode ? 'text-[#f85149]' : 'text-red-500'}`}>
             {error}

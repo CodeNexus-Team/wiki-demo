@@ -15,6 +15,7 @@
 - **模糊指令澄清**：输入"优化一下"等模糊指令时，AI 会列出可选方向让你一键选择
 - **Diff 预览确认**：修改前后红绿对比，确认无误后再写入，避免误操作
 - **数据格式转换**：自动将 `.meta.json` / `.md` 格式的 Wiki 数据转换为可浏览的页面
+- **Wiki 路由索引（LLM 驱动）**：为整个 Wiki 仓库生成极简路由索引（`.index/wiki_index.json`），让 AI 在回答问题前能快速定位相关页面，避免盲目扫描
 
 ## 架构概览
 
@@ -58,6 +59,10 @@
 ### 可选依赖
 - Gemini API Key（前端 AI 分析功能，未配置时 CodeNexus 功能不受影响）
 - Neo4j 数据库（用于代码实体关系查询，未配置时自动跳过）
+- OpenAI API Key（用于生成 Wiki 路由索引 `wiki_index.json`，未配置时可使用 `--no-llm` 纯规则模式）
+  ```bash
+  pip install openai
+  ```
 
 ## 快速开始
 
@@ -250,7 +255,95 @@ frontend/public/source-code/
 - Claude 调用的工具（Read、Grep、Bash 等）及返回结果
 - 模型输出的回答或修改指令内容
 
+## Wiki 路由索引（build_wiki_index.py）
+
+为整个 `wiki_result` 目录生成一份极简的路由索引，让 LLM 能快速了解 Wiki 整体情况、定位用户问题相关的页面。
+
+### 设计理念
+
+- **极简路由**：只存 `path` + `summary` + `classes`，让模型快速判断"要读哪个页面"
+- **不承担展示**：Claude CLI 有 Read/Grep/Glob 工具，具体内容按需读取，无需在 index 里存 outline/cross_references 等冗余信息
+- **增量构建**：缓存单页 meta 到 `.index/meta/`，mtime 校验未变化的页面直接复用
+
+### 索引结构
+
+```json
+{
+  "pages": [
+    {
+      "path": "门户系统/订单管理.json",
+      "summary": "订单提交、支付、查询、取消的完整业务流程（50-100 字 LLM 摘要）",
+      "classes": ["OmsOrderService", "OmsPortalOrderController"]
+    }
+  ]
+}
+```
+
+每页仅 3 个字段：
+- **`path`** — 作为 Read 工具的参数
+- **`summary`** — 给 LLM 做语义路由判断
+- **`classes`** — 从 `neo4j_source` 提取的真实类名，支持精确类名查询
+
+### 构建命令
+
+```bash
+# LLM 模式（默认，质量最好）
+export OPENAI_API_KEY=sk-xxx
+python build_wiki_index.py /path/to/wiki_result
+
+# 纯规则模式（无需 API key，摘要是前 200 字截断）
+python build_wiki_index.py /path/to/wiki_result --no-llm
+
+# 强制全量重建（忽略缓存）
+python build_wiki_index.py /path/to/wiki_result --force
+
+# 提高并发（默认 10）
+python build_wiki_index.py /path/to/wiki_result --concurrency 20
+
+# 切换模型
+OPENAI_MODEL=gpt-4o python build_wiki_index.py /path/to/wiki_result
+```
+
+### 集成到启动流程
+
+```bash
+# demo.py 新增 --build-index 选项
+python demo.py /path/to/wiki-data c --build-index
+
+# 纯规则模式（无需 OpenAI key）
+python demo.py /path/to/wiki-data c --build-index --no-llm-index
+```
+
+### 输出位置
+
+输出到 `wiki_result/.index/` 隐藏目录，不会被 wiki 扫描器扫到：
+
+```
+wiki_result/
+├── *.json                  ← Wiki 页面（被扫描）
+└── .index/                 ← 隐藏目录（不被扫描）
+    ├── wiki_index.json     ← LLM 路由索引
+    └── meta/               ← 单页缓存（增量构建用）
+        └── <hash>.meta.json
+```
+
+### 支持的 LLM 模型
+
+- **OpenAI GPT 系列**：`gpt-4o-mini`（默认，最便宜）/ `gpt-4o` / `gpt-3.5-turbo`
+- **OpenAI Reasoning 模型**：`gpt-5-mini` / `o1-mini` / `o3-mini`（自动使用 `max_completion_tokens` 参数）
+- **第三方兼容服务**：通过 `OPENAI_BASE_URL` 指定（Azure / 国内代理等）
+
+### 性能参考
+
+| 模型 | 单页延迟 | 124 页总耗时 |
+|---|---|---|
+| `gpt-4o-mini` | 1-3s | 30-60 秒 |
+| `gpt-4o` | 3-6s | 1-2 分钟 |
+| `gpt-5-mini`（reasoning） | 15-40s | 30-80 分钟 |
+
 ## 环境变量
+
+### 智能体相关
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -263,11 +356,22 @@ frontend/public/source-code/
 | `NEO4J_USER` | `neo4j` | Neo4j 用户名 |
 | `NEO4J_PASSWORD` | 空 | Neo4j 密码 |
 
+### Wiki 路由索引相关（build_wiki_index.py）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OPENAI_API_KEY` | 未设置 | OpenAI API Key（LLM 模式必需） |
+| `OPENAI_MODEL` | `gpt-4o-mini` | 使用的模型名 |
+| `OPENAI_BASE_URL` | 未设置 | 第三方兼容服务地址（Azure / 国内代理等） |
+| `OPENAI_MAX_TOKENS` | `600` / `4000` | 输出 token 上限（reasoning 模型自动用 4000） |
+| `OPENAI_NO_JSON_MODE` | 未设置 | 设置为 `1` 跳过 `response_format` 参数（兼容部分代理） |
+
 ## API 接口
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/list_wikis` | GET | 获取 Wiki 文件树状列表 |
+| `/api/wiki_index` | GET | 获取 Wiki 路由索引（`.index/wiki_index.json`），不存在时返回 404 |
 | `/api/search_wiki?q=xxx` | GET | 全文搜索 Wiki 内容，返回匹配的 block 及预览 |
 | `/api/scan_wikis` | GET | 扫描目录返回所有页面路径 |
 | `/api/fetch_page?page_path=xxx` | POST | 获取单个 Wiki 页面内容 |
@@ -281,27 +385,33 @@ frontend/public/source-code/
 
 ```
 wiki-demo/
-├── start.py                # 一键启动脚本（前端 + 后端）
-├── demo.py                 # 后端启动脚本
-├── markdown_parser.py      # .meta.json / .md → 前端 JSON 转换器
-├── clear.py                # JSON 文件清理工具
+├── start.py                  # 一键启动脚本（前端 + 后端）
+├── demo.py                   # 后端启动脚本（支持 --build-index）
+├── markdown_parser.py        # .meta.json / .md → 前端 JSON 转换器
+├── build_wiki_index.py       # Wiki 路由索引构建工具（OpenAI 驱动）
+├── clear.py                  # JSON 文件清理工具
 ├── server/
-│   ├── server.py           # FastAPI 后端主程序
-│   ├── agent.py            # Claude 智能体（交互式编辑 + 澄清机制）
-│   ├── neo4j_mcp_server.py # Neo4j MCP Server（知识图谱查询）
-│   ├── backend_mock.py     # Mock 实现
-│   ├── .env                # 环境变量配置（Neo4j 连接等）
+│   ├── server.py             # FastAPI 后端主程序
+│   ├── agent.py              # Claude 智能体（交互式编辑 + 澄清机制）
+│   ├── neo4j_mcp_server.py   # Neo4j MCP Server（知识图谱查询）
+│   ├── ask_user_mcp_server.py# 结构化澄清 MCP Server
+│   ├── backend_mock.py       # Mock 实现
+│   ├── .env                  # 环境变量（Neo4j / OpenAI 连接等）
 │   └── logs/
-│       └── agent.log       # 智能体调用日志
+│       └── agent.log         # 智能体调用日志
 ├── frontend/
-│   ├── App.tsx             # 前端入口
-│   ├── components/         # React 组件
-│   ├── hooks/              # 自定义 Hooks
-│   ├── services/           # API 服务层
-│   └── utils/              # 工具函数
-└── output/             # 示例数据
-    ├── *.meta.json         # 输入数据
-    └── wiki_result/        # 转换后的前端 JSON
+│   ├── App.tsx               # 前端入口
+│   ├── components/           # React 组件
+│   ├── hooks/                # 自定义 Hooks
+│   ├── services/             # API 服务层
+│   └── utils/                # 工具函数
+└── output/                   # 示例数据
+    ├── *.meta.json           # 输入数据
+    └── wiki_result/          # 转换后的前端 JSON
+        ├── *.json            # Wiki 页面（被扫描）
+        └── .index/           # 隐藏目录（不被扫描）
+            ├── wiki_index.json  # LLM 路由索引
+            └── meta/            # 单页缓存（增量构建用）
 ```
 
 ## 单独启动
