@@ -480,6 +480,128 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
             (el as HTMLElement).style.fill = '#0d1117';
           }
         });
+
+        // ---- 对比度兜底:只在 背景↔文字 对比度过低时才改写文字色 ----
+        // 覆盖两类样式来源:
+        //   (a) `style X fill:#xxx,color:#yyy` 产生的 inline style
+        //   (b) `classDef cls fill:#xxx` 产生的 <style> 块 CSS 规则(inline 抓不到)
+        // 前者用 element.style / getAttribute,后者走 getComputedStyle 兜底。
+        // 只在 WCAG 对比度 < 3 时覆盖,保留用户显式的合理 `color:` 搭配。
+        const parseColorToRgb = (c: string): [number, number, number] | null => {
+          if (!c) return null;
+          c = c.trim().toLowerCase();
+          if (c === 'none' || c === 'transparent') return null;
+          if (c.startsWith('#')) {
+            let h = c.slice(1);
+            if (h.length === 3) h = h.split('').map(ch => ch + ch).join('');
+            if (h.length !== 6) return null;
+            const r = parseInt(h.slice(0, 2), 16);
+            const g = parseInt(h.slice(2, 4), 16);
+            const b = parseInt(h.slice(4, 6), 16);
+            return Number.isNaN(r) ? null : [r, g, b];
+          }
+          const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+          if (m) return [+m[1], +m[2], +m[3]];
+          return null;
+        };
+        const relLum = (rgb: [number, number, number]): number => {
+          const srgb = rgb.map(c => {
+            const v = c / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+          });
+          return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+        };
+        const contrast = (a: [number, number, number], b: [number, number, number]): number => {
+          const la = relLum(a); const lb = relLum(b);
+          return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+        };
+        const pickTextColor = (bg: [number, number, number]): string => {
+          const darkText: [number, number, number] = [29, 29, 31];
+          const lightText: [number, number, number] = [230, 237, 243];
+          return contrast(bg, darkText) >= contrast(bg, lightText) ? '#1d1d1f' : '#e6edf3';
+        };
+        const resolveFill = (el: Element): [number, number, number] | null => {
+          // 1. inline style fill
+          const inlineFill = (el as HTMLElement).style.fill;
+          let rgb = parseColorToRgb(inlineFill);
+          if (rgb) return rgb;
+          // 2. fill 属性
+          const attrFill = el.getAttribute('fill');
+          rgb = parseColorToRgb(attrFill || '');
+          if (rgb) return rgb;
+          // 3. 计算样式(覆盖 classDef 走 <style> 块的情况)
+          try {
+            const computed = window.getComputedStyle(el as Element).fill;
+            rgb = parseColorToRgb(computed);
+            if (rgb) return rgb;
+          } catch {}
+          return null;
+        };
+        const resolveTextColor = (el: Element): [number, number, number] | null => {
+          try {
+            const cs = window.getComputedStyle(el as Element);
+            // HTML label 用 color,SVG text 用 fill
+            return parseColorToRgb(cs.color) || parseColorToRgb(cs.fill);
+          } catch {
+            return null;
+          }
+        };
+        const applyTextColor = (root: Element, color: string) => {
+          // Mermaid 的 classDef 生成的样式在 <style> 块里常带 !important,
+          // 不加 !important 的 inline style 压不过它。这里一律用 setProperty + important。
+          root.querySelectorAll('text, tspan').forEach(el => {
+            (el as HTMLElement).style.setProperty('fill', color, 'important');
+          });
+          root.querySelectorAll('.nodeLabel, .nodeLabel *, foreignObject *, .label, .label *').forEach(el => {
+            const st = (el as HTMLElement).style;
+            st.setProperty('color', color, 'important');
+            st.setProperty('fill', color, 'important');
+          });
+        };
+
+        // ---- 白色节点检测: 用 getComputedStyle 直接读实际渲染色 ----
+        // 不管 Mermaid 是 inline style / SVG attr / <style> block 哪种方式放 fill,getComputedStyle 都返回最终色。
+        // 覆盖一律走 inline setProperty(..., 'important'): classDef 生成的 `.cls > rect` 特异性 >= (0,0,1,1),
+        // 外挂 <style> 用属性选择器 (0,0,1,0) 即便带 !important 也会输;inline !important 才能稳压。
+        const whiteFixedNodes = new Set<Element>();
+
+        svgElement.querySelectorAll('.node rect, .node polygon, .node circle, .node ellipse, .node path').forEach(shape => {
+          let computedFill = '';
+          try {
+            computedFill = window.getComputedStyle(shape as Element).fill;
+          } catch { return; }
+          const rgb = parseColorToRgb(computedFill);
+          if (!rgb) return;
+          const [r, g, b] = rgb;
+          if (r > 240 && g > 240 && b > 240) {
+            (shape as HTMLElement).style.setProperty('fill', '#21262d', 'important');
+            const parentNode = shape.closest('.node, g.cluster');
+            if (parentNode) whiteFixedNodes.add(parentNode);
+          }
+        });
+
+        whiteFixedNodes.forEach(node => applyTextColor(node, '#e6edf3'));
+
+        // ---- 非白色的用户自定义色节点 (#e8f4ff / #0080ff / #fbb 等),做极性检查 ----
+        svgElement.querySelectorAll('.node, g.cluster').forEach(node => {
+          if (whiteFixedNodes.has(node)) return;  // 白色节点已在上面用 inline !important 覆盖
+          const shape = node.querySelector('rect, polygon, circle, ellipse, path');
+          if (!shape) return;
+          const bgRgb = resolveFill(shape);
+          if (!bgRgb) return;
+
+          const sampleLabel = node.querySelector('.nodeLabel, .cluster-label, foreignObject span, foreignObject p, text');
+          const textRgb = sampleLabel ? resolveTextColor(sampleLabel) : null;
+
+          // 只有 背景 和 文字 在同一亮度极性时才覆盖 (都偏亮 或 都偏暗 = 真正的看不见)。
+          if (textRgb) {
+            const bgLight = relLum(bgRgb) > 0.5;
+            const txLight = relLum(textRgb) > 0.5;
+            if (bgLight !== txLight) return;
+          }
+
+          applyTextColor(node, pickTextColor(bgRgb));
+        });
       }
     }
   }, [svg, isDarkMode]);
