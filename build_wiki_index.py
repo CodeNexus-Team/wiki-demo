@@ -289,12 +289,22 @@ async def _call_llm(title: str, outline: list, content: str) -> dict:
             ],
         }
 
+        # 读 OPENAI_MAX_TOKENS 容错空字符串 (用户通过前端保存 .env 时可能写入空值)
+        def _env_int(name: str, default: int) -> int:
+            raw = (os.environ.get(name, "") or "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
         # Reasoning 模型（o1/o3/gpt-5 等）需要更大的 token 预算且使用新参数名
         if is_reasoning:
             # 思考 + 输出，预算给 4000；reasoning 模型不支持 temperature/top_p 等参数
-            kwargs["max_completion_tokens"] = int(os.environ.get("OPENAI_MAX_TOKENS", "4000"))
+            kwargs["max_completion_tokens"] = _env_int("OPENAI_MAX_TOKENS", 4000)
         else:
-            kwargs["max_tokens"] = int(os.environ.get("OPENAI_MAX_TOKENS", "600"))
+            kwargs["max_tokens"] = _env_int("OPENAI_MAX_TOKENS", 600)
             kwargs["temperature"] = 0.3
 
         if use_json_mode:

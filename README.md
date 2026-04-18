@@ -34,11 +34,12 @@
 ## 前置要求
 
 ### 后端依赖
-- Python 3.7+
-- 安装 Python 包：
+- Python 3.9+
+- 一键安装所有 Python 依赖：
   ```bash
-  pip install fastapi uvicorn anthropic
+  pip install -r requirements.txt
   ```
+  涵盖:`fastapi` · `uvicorn` · `pydantic` · `python-dotenv` · `mcp` · `neo4j` · `openai`。
 
 ### 前端依赖
 - Node.js 16+
@@ -49,43 +50,54 @@
   ```
 
 ### 智能体依赖（交互式编辑功能）
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并完成认证
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并完成认证(独立工具,不走 pip)
 - 验证安装：`claude --version`
-- 安装 MCP 和环境变量支持：
-  ```bash
-  pip install mcp python-dotenv
-  ```
 
-### 可选依赖
-- Gemini API Key（前端 AI 分析功能，未配置时 CodeNexus 功能不受影响）
-- Neo4j 数据库（用于代码实体关系查询，未配置时自动跳过）
-- OpenAI API Key（用于生成 Wiki 路由索引 `wiki_index.json`，未配置时可使用 `--no-llm` 纯规则模式）
-  ```bash
-  pip install openai
-  ```
+### 运行时可选服务
+- **Neo4j 数据库** —— 代码实体关系查询,未配置时自动跳过(`neo4j` 包仍会被 import,但不连库)
+- **OpenAI API Key** —— 生成 Wiki 路由索引 `wiki_index.json`,未配置时可用 `--no-llm` 纯规则模式
 
 ## 快速开始
 
-### 1. 转换数据并启动
+推荐方式：**先启动前端，在浏览器里配置并启动后端**。首次运行不需要敲任何转换/索引命令。
+
+### 方式 A：浏览器一键启动（推荐）
 
 ```bash
-python start.py /path/to/wiki-data c
+cd frontend
+npm run dev
 ```
 
-执行流程：
-1. 扫描目录下的 `.md` 和 `.meta.json` 文件
-2. 转换为前端 JSON 格式，输出到 `/path/to/wiki-data/wiki_result/`
-3. 启动后端（http://localhost:11219）和前端（http://localhost:3000）
+打开 http://localhost:3000，系统检测到后端未运行会显示「启动后端」界面：
 
-### 2. 直接启动（已有转换后数据）
+1. 在表单里填（已配置过的字段会从 `server/.env` 自动回显）：
+   - **OpenAI API Key**（必填）—— 用于生成 Wiki 路由索引，支持第三方兼容服务
+   - **OpenAI Base URL / Model**（可选）—— 留空用官方 / `gpt-4o-mini`
+   - **业务源码根目录**（可选）—— Agent 读取源码的位置（下方「源码文件存放」章节详述）
+   - **原始 Wiki 根目录**（必填）—— 含 `.md` / `.meta.json` 的目录，会自动转换到 `<目录>/wiki_result/`
+   - **Neo4j**（可选，折叠）—— 未配置时图谱查询自动跳过
+2. 点击「启动后端」→ SSE 实时展示转换/建索引/启动日志 → 完成后自动进入主界面。
+
+**底层逻辑**：Vite dev 插件接收表单 → 合并写入 `server/.env` → `spawn python launch.py <WIKI_RAW_PATH>`（自动做一致性检查，必要时转换 + 建索引 + 启动 FastAPI）。
+
+### 方式 B：命令行启动（已有转换后数据）
 
 ```bash
-python start.py /path/to/wiki-data
+python start.py /path/to/wiki-data       # 前端 + 后端一起
+python start.py /path/to/wiki-data c     # + 自动执行一次转换
 ```
 
-### 3. 浏览器访问
+### 方式 C：单独启动后端
 
-打开 http://localhost:3000，在侧边栏点击「生成 Wiki」，点击生成按钮即可浏览所有 Wiki 页面。
+```bash
+python launch.py /path/to/wiki-data      # 前端 BackendLauncher 走的底层命令
+# 或
+python demo.py /path/to/wiki-data c --build-index
+```
+
+### 浏览 Wiki
+
+任一方式启动成功后，侧边栏点「生成 Wiki」即可看到所有页面。
 
 ## 输入数据格式
 
@@ -182,41 +194,22 @@ AI 生成 Wiki 时的输出格式，结构精简，减轻 AI 负担：
 
 ## 源码文件存放
 
-交互式编辑功能需要访问代码仓库的实际源码文件。源码文件需存放在以下位置：
+交互式编辑需要访问真实源码。通过 `SOURCE_ROOT_PATH` 环境变量指向一个**绝对路径**目录即可，**不再要求放在 `frontend/public/` 下**。
 
-```
-frontend/public/source-code/
-└── <项目名>/                    # 代码仓库根目录
-    ├── mall-admin/
-    │   └── src/main/java/...
-    ├── mall-common/
-    │   └── src/main/java/...
-    └── ...
-```
+**两个使用场景，都由同一个 `SOURCE_ROOT_PATH` 驱动：**
 
-**两个使用场景：**
+1. **前端源码面板** —— Vite dev 插件 `sourceCodeScannerPlugin` 读取 `SOURCE_ROOT_PATH`，把它挂到 `/source-code/*` 路径下；源码面板 `fetch('/source-code/<file>')` 直接取。
+2. **智能体读源码** —— Claude CLI 的 cwd 设为 `SOURCE_ROOT_PATH`，模型通过 `Read` 工具按相对路径读取。
 
-1. **前端源码面板展示**：点击 Wiki block 关联的源码引用时，前端直接从 `frontend/public/source-code/` 加载文件内容并高亮显示。
+**配置方式**（二选一）：
 
-2. **智能体读取源码**：Claude CLI 的工作目录为项目根目录，模型通过 `Read` 工具读取 `frontend/public/source-code/<项目名>/` 下的文件来获取准确信息。System Prompt 中需指定源码路径（当前硬编码在 `agent.py` 的 `SYSTEM_PROMPT` 中）。
+- 在「启动后端」界面的「业务源码根目录」字段里填（推荐），会写入 `server/.env`。
+- 或手工编辑 `server/.env`：
+  ```
+  SOURCE_ROOT_PATH=/absolute/path/to/your/project
+  ```
 
-**配置步骤：**
-
-1. 将代码仓库复制或软链接到 `frontend/public/source-code/` 下：
-   ```bash
-   # 复制
-   cp -r /path/to/your/java-project frontend/public/source-code/my-project
-
-   # 或软链接（推荐，避免重复占用空间）
-   ln -s /path/to/your/java-project frontend/public/source-code/my-project
-   ```
-
-2. 设置环境变量 `SOURCE_ROOT_PATH` 或修改 `server/agent.py` 中的默认值：
-   ```bash
-   export SOURCE_ROOT_PATH=/absolute/path/to/wiki-demo/frontend/public/source-code/my-project
-   ```
-
-> `.meta.json` 中 `source_id_list[].name` 的文件路径应与 `frontend/public/source-code/<项目名>/` 下的相对路径一致。例如 `name` 为 `mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`，则对应文件为 `frontend/public/source-code/mall/mall-admin/src/main/java/com/macro/mall/config/GlobalCorsConfig.java`。
+> `.meta.json` 中 `source_id_list[].name` 的路径必须相对于 `SOURCE_ROOT_PATH`。例如 `name` 为 `mall-admin/src/main/java/.../GlobalCorsConfig.java`，则实际文件应在 `$SOURCE_ROOT_PATH/mall-admin/src/main/java/.../GlobalCorsConfig.java`。
 
 ## 交互式智能体
 
@@ -345,16 +338,20 @@ wiki_result/
 
 ### 智能体相关
 
+在「启动后端」界面填表会自动写入 `server/.env`。高级字段（带默认值的）可以不写入 `.env`，运行时用默认值兜底；空字符串也会被安全处理（`_env_str` / `_env_int` 容错）。
+
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `WIKI_ROOT_PATH` | 自动设置 | Wiki JSON 文件根目录（启动时由 demo.py 自动设置为 `<root>/wiki_result`） |
-| `CLAUDE_MODEL` | `sonnet` | Claude 模型选择：`sonnet` / `opus` / `haiku` |
+| `WIKI_RAW_PATH` | — | **必填**。原始 Wiki 根目录（含 `.md` / `.meta.json`），启动时 `launch.py` 自动转换到 `<WIKI_RAW_PATH>/wiki_result/` |
+| `WIKI_ROOT_PATH` | 自动拼装 | `launch.py` 在运行时自动设为 `<WIKI_RAW_PATH>/wiki_result`，**不需要手填** |
+| `SOURCE_ROOT_PATH` | 空 | 业务源码根目录（前端源码面板 + Agent Read 工具共用） |
+| `CLAUDE_MODEL` | `sonnet` | Claude 模型：`sonnet` / `opus` / `haiku` |
 | `CLAUDE_MAX_TOKENS` | `4096` | 智能体输出 token 上限 |
 | `MAX_TOOL_ROUNDS` | `15` | 智能体最大工具调用轮次 |
-| `SOURCE_ROOT_PATH` | 空 | 源码根目录（智能体读取源码时使用） |
 | `NEO4J_URI` | 未设置 | Neo4j 连接地址（可选，未配置时跳过图谱查询） |
 | `NEO4J_USER` | `neo4j` | Neo4j 用户名 |
 | `NEO4J_PASSWORD` | 空 | Neo4j 密码 |
+| `ASK_USER_COMM_DIR` | `/tmp/ask_user_comm` | `ask_user` MCP 结构化澄清的文件通信目录 |
 
 ### Wiki 路由索引相关（build_wiki_index.py）
 
@@ -385,23 +382,27 @@ wiki_result/
 
 ```
 wiki-demo/
-├── start.py                  # 一键启动脚本（前端 + 后端）
+├── start.py                  # CLI 一键启动脚本（前端 + 后端）
+├── launch.py                 # 前端 BackendLauncher 走的启动脚本（一致性检查 + 转换 + 建索引 + uvicorn）
 ├── demo.py                   # 后端启动脚本（支持 --build-index）
 ├── markdown_parser.py        # .meta.json / .md → 前端 JSON 转换器
 ├── build_wiki_index.py       # Wiki 路由索引构建工具（OpenAI 驱动）
 ├── clear.py                  # JSON 文件清理工具
 ├── server/
-│   ├── server.py             # FastAPI 后端主程序
+│   ├── server.py             # FastAPI 后端主程序（含 .env 管理、BackendLauncher API）
 │   ├── agent.py              # Claude 智能体（交互式编辑 + 澄清机制）
 │   ├── neo4j_mcp_server.py   # Neo4j MCP Server（知识图谱查询）
 │   ├── ask_user_mcp_server.py# 结构化澄清 MCP Server
-│   ├── backend_mock.py       # Mock 实现
-│   ├── .env                  # 环境变量（Neo4j / OpenAI 连接等）
+│   ├── .env                  # 环境变量（由 BackendLauncher 表单或手工维护）
 │   └── logs/
 │       └── agent.log         # 智能体调用日志
 ├── frontend/
-│   ├── App.tsx               # 前端入口
-│   ├── components/           # React 组件
+│   ├── App.tsx               # 前端入口（后端未启动时显示 BackendLauncher）
+│   ├── vite.config.ts        # 含 backendLauncherPlugin + sourceCodeScannerPlugin 两个自定义 dev 插件
+│   ├── components/
+│   │   ├── BackendLauncher.tsx    # 唯一的 .env 配置入口 + 启动按钮
+│   │   ├── SourceCodePanel.tsx    # 源码面板（读 SOURCE_ROOT_PATH）
+│   │   └── ...
 │   ├── hooks/                # 自定义 Hooks
 │   ├── services/             # API 服务层
 │   └── utils/                # 工具函数
@@ -416,10 +417,12 @@ wiki-demo/
 
 ## 单独启动
 
-### 仅启动后端
+### 仅启动后端（绕过 BackendLauncher）
 
 ```bash
-python demo.py /path/to/wiki-data [c]
+python launch.py /path/to/wiki-data        # 自动转换 + 建索引 + 启动
+python demo.py /path/to/wiki-data c        # 只转换 + 启动，不建索引
+python demo.py /path/to/wiki-data --build-index  # 手工控制建索引
 ```
 
 ### 仅启动前端
@@ -428,6 +431,7 @@ python demo.py /path/to/wiki-data [c]
 cd frontend
 npm run dev
 ```
+后端未起时会显示 BackendLauncher；后端已起时跳过，直接进主界面。
 
 ## 清理 JSON 文件
 
@@ -437,23 +441,33 @@ python clear.py /path/to/wiki-data/wiki_result -f
 
 ## 故障排除
 
-### 端口被占用
-- 后端端口：编辑 `demo.py`，修改 `port=11219`
-- 前端端口：编辑 `frontend/vite.config.ts`，添加 `server: { port: 3001 }`
+### BackendLauncher 启动失败 / 想重新配置
+- 后端成功启动后 BackendLauncher 自动隐藏。如需改配置：
+  1. `POST /api/dev/backend/stop` 或直接 `kill` 掉 launch.py 进程
+  2. 刷新 http://localhost:3000 会自动回到 BackendLauncher
+- SSE 日志里 `[error]` 行可直接看到失败原因；Python 侧详细日志在 `server/logs/agent.log`
 
-### Gemini API 未配置
-- 不影响 CodeNexus 功能使用，仅前端 Gemini 分析功能不可用
-- 如需使用，在 `frontend/.env.local` 中设置 `GEMINI_API_KEY` 后重启前端
+### 端口被占用
+- 后端端口：编辑 `frontend/vite.config.ts` 的 `BACKEND_PORT` 常量（默认 11219）
+- 前端端口：编辑 `frontend/vite.config.ts` 的 `server: { port: 3000 }`
+
+### `.env` 里某个字段是空串导致崩溃
+- 已修复。`CLAUDE_MODEL=` / `CLAUDE_MAX_TOKENS=` 这类空值会被 `_env_str` / `_env_int` 容错为默认值
+- 推荐做法：**直接删除空值行**，不要留 `KEY=`
 
 ### 智能体调用失败
 - 确认 Claude Code CLI 已安装：`claude --version`
 - 检查日志：`server/logs/agent.log`
-- 如果使用第三方中转，在 `agent.py` 中配置 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`
+- 如果使用第三方 Anthropic 中转，设置 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`
 - 确认 MCP 依赖已安装：`pip install mcp`
 
 ### Neo4j 查询失败
 - 检查 `server/.env` 中的连接信息（`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`）
-- 未配置时智能体会自动跳过图谱查询，改用 Read/Grep 读取源码
+- 未配置时智能体自动跳过图谱查询，改用 Read/Grep 读取源码
+
+### 源码面板显示"未找到源代码文件"
+- 确认 `SOURCE_ROOT_PATH` 已在 `server/.env` 或 BackendLauncher 中填写绝对路径
+- 重启前端（Vite 插件只在启动时读 `.env`）
 
 ### 转换失败
 - 确认 `markdown_parser.py` 存在

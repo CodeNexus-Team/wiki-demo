@@ -519,7 +519,12 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
               showLineNumbers={true}
               wrapLines={true}
               lineProps={(lineNumber: number) => {
-                const style: React.CSSProperties = { display: 'block' };
+                // 行内 span 显式指定行高,避免从 code 继承主题的 1.2em/1.5 造成暗/亮行高不一致
+                const style: React.CSSProperties = {
+                  display: 'block',
+                  lineHeight: '21px',
+                  fontSize: '13px',
+                };
                 if (highlightLine && displayFile === location?.file) {
                   const endLine = highlightEndLine || highlightLine;
                   if (lineNumber >= highlightLine && lineNumber <= endLine) {
@@ -528,6 +533,15 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
                   }
                 }
                 return { style };
+              }}
+              // 强制 <code> 的字号和行高统一,覆盖 ghcolors (.9em/1.2em) 和 vscDark (13px/1.5) 的主题默认值。
+              // 这样两种模式每行都是 21px,scrollToHighlightLine 的 `lineHeight = 21` 公式才成立。
+              codeTagProps={{
+                style: {
+                  fontSize: '13px',
+                  lineHeight: '21px',
+                  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                },
               }}
               customStyle={{
                 margin: 0,

@@ -42,9 +42,32 @@ agent_logger.addHandler(_handler)
    
 # ==================== 配置 ====================
 
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "sonnet")  # claude CLI 支持: sonnet, opus, haiku
-CLAUDE_MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "4096"))  # 限制输出 token 数加速响应
-MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "15"))
+def _env_str(name: str, default: str) -> str:
+    """读取 env 字符串变量,对空字符串容错回退默认值。
+    .env 里 KEY= (空值) 时 os.environ.get(name, default) 会返回 ""(不会用 default),
+    空串传给下游(比如 claude CLI --model)会 400。
+    """
+    return ((os.environ.get(name, "") or "").strip()) or default
+
+
+def _env_int(name: str, default: int) -> int:
+    """读取 env 整数变量,对空字符串/非数字容错回退默认值。
+    .env 文件可能把未配置的变量写成 KEY= (空值),直接 int("") 会抛 ValueError。
+    """
+    raw = (os.environ.get(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+CLAUDE_MODEL = _env_str("CLAUDE_MODEL", "sonnet")  # claude CLI 支持: sonnet, opus, haiku
+
+
+CLAUDE_MAX_TOKENS = _env_int("CLAUDE_MAX_TOKENS", 4096)  # 限制输出 token 数加速响应
+MAX_TOOL_ROUNDS = _env_int("MAX_TOOL_ROUNDS", 15)
 SOURCE_ROOT_PATH = os.environ.get("SOURCE_ROOT_PATH", "")
 
 # 追踪本 agent 创建的所有 session_id，用于安全清理

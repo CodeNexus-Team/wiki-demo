@@ -790,6 +790,341 @@ async def apply_changes_api(request: ApplyChangesRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"应用变更失败: {str(e)}")
 
 
+# ==================== .env 配置管理 ====================
+#
+# 给前端"生成 Wiki"界面提供 .env 编辑能力:
+#   GET  /api/env       返回当前 .env 内容(secret 字段 mask 显示) + 字段 schema 供前端渲染表单
+#   POST /api/env       接收前端提交的配置,原子覆盖写入 server/.env
+#
+# Secret 字段(API KEY / 密码)处理:
+#   - GET 返回 preview (例如 "sk-••••bdef",只露首尾 4 个字符)
+#   - POST 如果 secret 字段提交空字符串 → 保持原值不变(方便"不改 key 只改其他字段")
+#   - POST 如果 secret 字段提交非空字符串 → 覆盖为新值
+
+_ENV_FILE = Path(__file__).parent / ".env"
+
+# .env 字段 schema——前端按此渲染表单。顺序决定 UI 顺序。
+_ENV_SCHEMA = [
+    # 核心组: wiki 生成必须
+    {
+        "name": "OPENAI_API_KEY",
+        "label": "OpenAI API Key",
+        "description": "wiki 生成必需。也可以是第三方兼容服务的 key。",
+        "placeholder": "sk-...",
+        "is_secret": True, "required": True, "group": "core",
+    },
+    {
+        "name": "OPENAI_BASE_URL",
+        "label": "OpenAI Base URL",
+        "description": "可选。第三方兼容服务地址(如国内代理),留空则用官方。",
+        "placeholder": "https://api.openai.com/v1",
+        "is_secret": False, "required": False, "group": "core",
+    },
+    {
+        "name": "OPENAI_MODEL",
+        "label": "OpenAI Model",
+        "description": "生成 wiki 索引时用的模型。默认 gpt-4o-mini。",
+        "placeholder": "gpt-4o-mini",
+        "is_secret": False, "required": False, "group": "core",
+    },
+    {
+        "name": "SOURCE_ROOT_PATH",
+        "label": "业务源码根目录",
+        "description": "项目业务代码(Java / Python 等)的绝对路径。Claude CLI 的 Read 工具会从这里读源码,供 agent 回答问题或修改 wiki 时对照。和 Wiki 根目录是不同概念。",
+        "placeholder": "/Users/you/code/your-project",
+        "is_secret": False, "required": False, "group": "core",
+        "type": "directory",
+    },
+    {
+        "name": "WIKI_RAW_PATH",
+        "label": "原始 Wiki 根目录",
+        "description": "未转换的 wiki 根目录(含 .md / .meta.json)。启动时 launch.py 会把它转换到 <路径>/wiki_result。前端'启动后端'界面填写的就是这个。WIKI_ROOT_PATH 由此自动拼装,不需要单独配置。",
+        "placeholder": "/Users/you/code/your-wiki",
+        "is_secret": False, "required": True, "group": "core",
+        "type": "directory",
+    },
+    # Neo4j 组: 可选功能
+    {
+        "name": "NEO4J_URI",
+        "label": "Neo4j URI",
+        "description": "可选。若配置图谱则填写 bolt:// 或 neo4j:// 地址。",
+        "placeholder": "neo4j://127.0.0.1:7687",
+        "is_secret": False, "required": False, "group": "neo4j",
+    },
+    {
+        "name": "NEO4J_USER",
+        "label": "Neo4j 用户名",
+        "description": "默认 neo4j。",
+        "placeholder": "neo4j",
+        "is_secret": False, "required": False, "group": "neo4j",
+    },
+    {
+        "name": "NEO4J_PASSWORD",
+        "label": "Neo4j 密码",
+        "description": "Neo4j 密码。",
+        "placeholder": "",
+        "is_secret": True, "required": False, "group": "neo4j",
+    },
+    # 高级组: 通常不需要改
+    {
+        "name": "CLAUDE_MODEL",
+        "label": "Claude Model",
+        "description": "Claude CLI 模型,可选 sonnet/opus/haiku。默认 sonnet。",
+        "placeholder": "sonnet",
+        "is_secret": False, "required": False, "group": "advanced",
+    },
+    {
+        "name": "CLAUDE_MAX_TOKENS",
+        "label": "Claude Max Tokens",
+        "description": "Claude 单次输出 token 上限。默认 4096。",
+        "placeholder": "4096",
+        "is_secret": False, "required": False, "group": "advanced",
+    },
+    {
+        "name": "MAX_TOOL_ROUNDS",
+        "label": "Agent 最大工具轮次",
+        "description": "Agent 在一次对话里最多调用多少轮工具。默认 15。",
+        "placeholder": "15",
+        "is_secret": False, "required": False, "group": "advanced",
+    },
+    {
+        "name": "OPENAI_MAX_TOKENS",
+        "label": "OpenAI Max Tokens",
+        "description": "wiki 索引生成时 OpenAI 输出 token 上限。默认 600。",
+        "placeholder": "600",
+        "is_secret": False, "required": False, "group": "advanced",
+    },
+    {
+        "name": "OPENAI_NO_JSON_MODE",
+        "label": "OpenAI 禁用 JSON Mode",
+        "description": "某些第三方服务不支持 response_format,此时填 1 禁用。",
+        "placeholder": "",
+        "is_secret": False, "required": False, "group": "advanced",
+    },
+    {
+        "name": "ASK_USER_COMM_DIR",
+        "label": "Ask-user MCP 通信目录",
+        "description": "澄清机制的文件通信目录,一般保持默认。",
+        "placeholder": "/tmp/ask_user_comm",
+        "is_secret": False, "required": False, "group": "advanced",
+        "type": "directory",
+    },
+]
+
+_ENV_VAR_NAMES = {item["name"] for item in _ENV_SCHEMA}
+_ENV_SECRET_NAMES = {item["name"] for item in _ENV_SCHEMA if item.get("is_secret")}
+
+
+def _parse_env_file(path: Path) -> Dict[str, str]:
+    """解析 .env 文件为 {key: value} dict。保持简单,支持引号包裹和 # 注释。"""
+    result: Dict[str, str] = {}
+    if not path.is_file():
+        return result
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return result
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "=" not in s:
+            continue
+        key, val = s.split("=", 1)
+        key = key.strip()
+        val = val.strip()
+        # 去掉包裹的单/双引号
+        if len(val) >= 2 and ((val[0] == val[-1] == '"') or (val[0] == val[-1] == "'")):
+            val = val[1:-1]
+        result[key] = val
+    return result
+
+
+def _mask_secret(value: str) -> str:
+    """把 secret 字段 mask 为 'sk-••••bdef' 形式(首尾各 4 字符)"""
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "•" * len(value)
+    return value[:4] + "•" * max(4, len(value) - 8) + value[-4:]
+
+
+def _atomic_write_env(path: Path, vars_map: Dict[str, str]) -> None:
+    """原子写入 .env 文件。先写临时文件再 rename,防止崩溃破坏原文件。
+    写入格式: 每行 KEY=VALUE,值含空格/引号时用双引号包裹。
+    只写入 schema 里定义且值非空的变量,按 schema 顺序排列(保证输出稳定)。
+
+    跳过空值的原因: `os.environ.get(name, default)` 在 key 存在但值为空时返回 "",
+    会让 `int("")` 之类的解析代码崩溃。干脆不写这些空行,由应用侧用默认值兜底。
+    """
+    lines: List[str] = []
+    lines.append("# Auto-generated by /api/env endpoint. Do not edit manually while server is running.")
+    lines.append("")
+    # 先按 group 分组过滤出有值的字段,再输出
+    group_order = ["core", "neo4j", "advanced"]
+    group_titles = {
+        "core": "Core (wiki 生成必需)",
+        "neo4j": "Neo4j 图谱(可选)",
+        "advanced": "高级调优(通常不改)",
+    }
+    for group in group_order:
+        group_items = [item for item in _ENV_SCHEMA if item.get("group") == group]
+        # 过滤出有值的字段,空值跳过
+        non_empty = [
+            (item["name"], vars_map.get(item["name"], ""))
+            for item in group_items
+            if vars_map.get(item["name"], "").strip()
+        ]
+        if not non_empty:
+            continue
+        lines.append(f"# ==================== {group_titles.get(group, group)} ====================")
+        for name, value in non_empty:
+            if any(c in value for c in ' \t#"\'\\'):
+                escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(f'{name}="{escaped}"')
+            else:
+                lines.append(f"{name}={value}")
+        lines.append("")
+    text = "\n".join(lines).rstrip() + "\n"
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    os.replace(str(tmp_path), str(path))
+
+
+class EnvWriteRequest(BaseModel):
+    """前端提交的 env 字段。缺失或空字符串的 secret 字段表示保持原值。"""
+    values: Dict[str, str] = Field(default_factory=dict)
+
+
+@app.get("/api/env")
+async def get_env_config() -> Dict[str, Any]:
+    """
+    读取 server/.env 内容,返回当前值 + 字段 schema。
+    - 若文件不存在,file_exists=False,前端应强制显示配置界面
+    - secret 字段的 value 返回 preview (首尾 4 字符),完整值只通过 POST 写入,不可读取
+    """
+    file_exists = _ENV_FILE.is_file()
+    current = _parse_env_file(_ENV_FILE)
+
+    vars_info: Dict[str, Any] = {}
+    for item in _ENV_SCHEMA:
+        name = item["name"]
+        raw_value = current.get(name, "")
+        is_secret = bool(item.get("is_secret"))
+        configured = bool(raw_value)
+        value_display = _mask_secret(raw_value) if (is_secret and raw_value) else raw_value
+        vars_info[name] = {
+            "value": value_display,
+            "configured": configured,
+            "is_secret": is_secret,
+        }
+
+    return {
+        "file_exists": file_exists,
+        "file_path": str(_ENV_FILE),
+        "vars": vars_info,
+        "schema": _ENV_SCHEMA,
+    }
+
+
+@app.post("/api/env")
+async def save_env_config(request: EnvWriteRequest) -> Dict[str, Any]:
+    """
+    覆盖写入 server/.env。
+    - 只接受 schema 里定义的变量,未知变量被忽略(白名单安全)
+    - secret 字段如果提交空字符串,保持原值不变
+    - 原子写入:失败不破坏原文件
+    """
+    submitted = request.values or {}
+    # 读当前值(用于 secret 保留)
+    current = _parse_env_file(_ENV_FILE)
+
+    final_vars: Dict[str, str] = {}
+    changed: List[str] = []
+
+    for item in _ENV_SCHEMA:
+        name = item["name"]
+        is_secret = bool(item.get("is_secret"))
+        old_value = current.get(name, "")
+
+        if name not in submitted:
+            # 前端没传这个字段 → 保持原值
+            final_vars[name] = old_value
+            continue
+
+        new_value = submitted[name] or ""
+        # secret 字段提交空字符串 → 保持原值(允许"不改 key,只改其他")
+        if is_secret and not new_value:
+            final_vars[name] = old_value
+            continue
+
+        final_vars[name] = new_value
+        if new_value != old_value:
+            changed.append(name)
+
+    try:
+        _atomic_write_env(_ENV_FILE, final_vars)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"写入 .env 失败: {e}")
+
+    return {
+        "success": True,
+        "file_path": str(_ENV_FILE),
+        "changed": changed,
+        "message": "配置已保存。请重启后端以使新配置生效。",
+    }
+
+
+# ==================== 本地目录浏览(给前端目录选择器用) ====================
+#
+# 仅用于本地运行的 demo 场景。浏览器沙盒拿不到任意绝对路径,所以提供一个服务端
+# "列出目录下子目录"的 API,前端做一个选择器 Modal 让用户一步步点进去。
+#
+# 安全约束: 只读,只列子目录(不读文件内容),隐藏目录默认过滤。
+
+@app.get("/api/fs/browse")
+async def fs_browse(path: str = "~") -> Dict[str, Any]:
+    """
+    列出指定目录下的子目录。
+    - path: 目录绝对路径。支持 '~' 解析为 $HOME,空字符串回退到 $HOME
+    - 返回: {path, parent, entries: [{name, is_dir}, ...]}
+    - entries 只包含子目录(不含文件),按字母序排列,默认过滤隐藏目录(. 开头)
+    """
+    raw = (path or "~").strip()
+    if raw == "" or raw == "~":
+        raw = os.path.expanduser("~")
+    else:
+        raw = os.path.expanduser(raw)
+    raw = os.path.abspath(raw)
+
+    if not os.path.isdir(raw):
+        raise HTTPException(status_code=404, detail=f"目录不存在: {raw}")
+
+    entries: List[Dict[str, Any]] = []
+    try:
+        for name in sorted(os.listdir(raw), key=lambda s: s.lower()):
+            if name.startswith("."):
+                continue
+            full = os.path.join(raw, name)
+            try:
+                if os.path.isdir(full):
+                    entries.append({"name": name, "is_dir": True})
+            except OSError:
+                # 符号链接循环 / 权限问题,跳过
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"无权访问: {raw}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取目录失败: {e}")
+
+    parent = os.path.dirname(raw)
+    if parent == raw:
+        parent = None  # 已经是文件系统根目录
+
+    return {"path": raw, "parent": parent, "entries": entries}
+
+
 # ==================== 启动入口 ====================
 
 if __name__ == "__main__":

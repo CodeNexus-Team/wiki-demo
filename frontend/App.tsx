@@ -4,10 +4,14 @@ import Dashboard from './components/Dashboard';
 import WikiBrowser from './components/WikiBrowser';
 import AnalysisView, { InitialWikiData } from './components/AnalysisView';
 import WikiHistoryPanel from './components/WikiHistoryPanel';
+import BackendLauncher from './components/BackendLauncher';
 import { AnalysisType, WikiHistoryRecord } from './types';
 import { WikiThemeContext, useWikiThemeState } from './hooks/useWikiTheme';
 
 const App: React.FC = () => {
+  // 后端就绪状态 —— 未就绪时整个 App 只显示 BackendLauncher(X 方案:完全隐藏其他界面)
+  const [backendReady, setBackendReady] = useState(false);
+
   const [currentView, setCurrentView] = useState<AnalysisType>(AnalysisType.DASHBOARD);
   const [wikiHistory, setWikiHistory] = useState<WikiHistoryRecord[]>([]);
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
@@ -58,6 +62,21 @@ const App: React.FC = () => {
     setCurrentView(view);
   }, []);
 
+  // 后端未就绪 → 只显示 BackendLauncher,不渲染主界面
+  if (!backendReady) {
+    return (
+      <WikiThemeContext.Provider value={themeState}>
+        <div className={`h-screen font-sans ${
+          isDarkMode
+            ? 'bg-[#010409] text-[#e6edf3] selection:bg-[#58a6ff] selection:text-white'
+            : 'bg-gradient-to-br from-[#f0f4ff] via-[#F5F5F7] to-[#fff5f5] text-[#1d1d1f] selection:bg-[#0071E3] selection:text-white'
+        }`}>
+          <BackendLauncher isDarkMode={isDarkMode} onReady={() => setBackendReady(true)} />
+        </div>
+      </WikiThemeContext.Provider>
+    );
+  }
+
   return (
     <WikiThemeContext.Provider value={themeState}>
       <div className={`flex h-screen font-sans transition-colors duration-300 ${
@@ -85,7 +104,10 @@ const App: React.FC = () => {
               <Dashboard isDarkMode={isDarkMode} />
             </div>
           ) : currentView === AnalysisType.WIKI_BROWSER && !wikiBrowserInitData ? (
-            <WikiBrowser isDarkMode={isDarkMode} onOpenWikiPage={handleOpenWikiPage} />
+            <WikiBrowser
+              isDarkMode={isDarkMode}
+              onOpenWikiPage={handleOpenWikiPage}
+            />
           ) : currentView === AnalysisType.WIKI_BROWSER && wikiBrowserInitData ? (
             <AnalysisView
               type={currentView}

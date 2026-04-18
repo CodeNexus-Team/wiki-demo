@@ -12,7 +12,14 @@ import {
   ExpandedQuestion,
   WikiPage,
   WikiTreeNode,
-  WikiIndex
+  WikiIndex,
+  EnvConfigResponse,
+  EnvSaveResponse,
+  FsBrowseResponse,
+  BackendStatus,
+  BackendStartEvent,
+  BackendRestartEvent,
+  DevEnvResponse
 } from '../types';
 import { wikiPageCache } from './wikiPageCache';
 
@@ -457,6 +464,163 @@ class CodeNexusWikiService {
    *
    * 当任一 *_blocks 非空时，前端应展示"AI 建议修改 N 处"按钮让用户确认。
    */
+  /**
+   * 读取 server/.env 配置(供"生成 Wiki"界面的设置表单)。
+   * secret 字段的 value 已 mask (例如 "sk-••••bdef"),完整值无法读取。
+   */
+  async getEnvConfig(): Promise<EnvConfigResponse> {
+    const response = await fetch(`${this.baseUrl}/api/env`);
+    if (!response.ok) {
+      throw new Error(`读取配置失败: ${response.status} ${response.statusText}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * 保存 server/.env 配置。
+   * secret 字段传空字符串表示保持原值不变。保存后需重启后端生效。
+   */
+  async saveEnvConfig(values: Record<string, string>): Promise<EnvSaveResponse> {
+    const response = await fetch(`${this.baseUrl}/api/env`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`保存配置失败: ${response.status} ${detail}`);
+    }
+    return await response.json();
+  }
+
+  // ============ 后端启动管理(通过 Vite dev server 插件) ============
+  //
+  // 这三个方法请求的是 Vite dev server 的 /api/dev/backend/* 端点,不是 Python 后端。
+  // 所以用同源相对 URL(没带 baseUrl),浏览器会访问到 :3000 上的 Vite 插件中间件。
+
+  /** 探测后端是否运行 */
+  async getBackendStatus(): Promise<BackendStatus> {
+    const resp = await fetch('/api/dev/backend/status');
+    if (!resp.ok) throw new Error(`状态探测失败: ${resp.status}`);
+    return resp.json();
+  }
+
+  /**
+   * 启动后端。SSE 流式推送进度事件。
+   * @param values BackendLauncher 表单里所有字段的当前值(空字符串会被插件跳过不写 .env)。
+   *               至少要包含非空的 WIKI_RAW_PATH,否则启动会失败。
+   * @param onEvent 每条 SSE 事件回调
+   */
+  async startBackend(
+    values: Record<string, string>,
+    onEvent: (ev: BackendStartEvent) => void
+  ): Promise<void> {
+    const resp = await fetch('/api/dev/backend/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    });
+    if (!resp.ok || !resp.body) {
+      throw new Error(`启动失败: ${resp.status} ${resp.statusText}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+        try {
+          onEvent(JSON.parse(payload) as BackendStartEvent);
+        } catch {
+          // ignore parse error on partial/malformed lines
+        }
+      }
+    }
+  }
+
+  /**
+   * 读取 server/.env 当前值(走 Vite dev 插件,后端未启动时也可用)。
+   * BackendLauncher 挂载时用它预填表单。返回的 values 是原始值(secret 未 mask)。
+   */
+  async getDevEnv(): Promise<DevEnvResponse> {
+    const resp = await fetch('/api/dev/env');
+    if (!resp.ok) throw new Error(`读取 .env 失败: ${resp.status}`);
+    return resp.json();
+  }
+
+  /** 停止本插件 spawn 的后端(外部启动的不会被停) */
+  async stopBackend(): Promise<{ stopped: boolean; reason?: string; pid?: number }> {
+    const resp = await fetch('/api/dev/backend/stop', { method: 'POST' });
+    return resp.json();
+  }
+
+  /**
+   * 重启后端(保存 .env 后让新配置生效)。SSE 流式推送进度。
+   * 内部流程: 停止当前 spawn 的子进程 → 等端口释放 → 从 .env 读 SOURCE_ROOT_PATH → 重新 spawn。
+   * 如果端口被外部进程占用(非本插件启动的),不会乱 kill,会返回 external=true。
+   */
+  async restartBackend(onEvent: (ev: BackendRestartEvent) => void): Promise<void> {
+    const resp = await fetch('/api/dev/backend/restart', { method: 'POST' });
+    if (!resp.ok || !resp.body) {
+      throw new Error(`重启失败: ${resp.status} ${resp.statusText}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+        try {
+          onEvent(JSON.parse(payload) as BackendRestartEvent);
+        } catch {
+          // 忽略部分/格式错误行
+        }
+      }
+    }
+  }
+
+  /**
+   * 列出指定目录下的子目录(供前端目录选择器用,走后端 API)。
+   * @param path 目录绝对路径,'~' 解析为 $HOME,空字符串等价于 '~'
+   */
+  async browseDirectory(path: string = '~'): Promise<FsBrowseResponse> {
+    const url = `${this.baseUrl}/api/fs/browse?path=${encodeURIComponent(path)}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`浏览目录失败: ${response.status} ${detail}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * 走 Vite dev 插件的目录浏览接口(后端未启动时可用)。
+   * 返回结构与 browseDirectory 完全一致。
+   */
+  async browseDirectoryViaDev(path: string = '~'): Promise<FsBrowseResponse> {
+    const url = `/api/dev/fs/browse?path=${encodeURIComponent(path)}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`浏览目录失败: ${response.status} ${detail}`);
+    }
+    return await response.json();
+  }
+
   async qaQuery(
     pagePath: string,
     userQuery: string,

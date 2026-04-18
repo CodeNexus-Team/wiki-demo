@@ -203,6 +203,80 @@ export interface QaAnswerResponse {
   qa_answer: string;
 }
 
+// --- 后端 .env 配置(用于"生成 Wiki"界面的设置表单)---
+export interface EnvFieldSchema {
+  name: string;
+  label: string;
+  description: string;
+  placeholder: string;
+  is_secret: boolean;
+  required: boolean;
+  group: 'core' | 'neo4j' | 'advanced' | string;
+  /** 字段类型,决定 UI 渲染方式。默认 'text'。 */
+  type?: 'text' | 'directory';
+}
+
+// --- 后端启动管理(Vite 插件 /api/dev/backend/* 端点)---
+export interface BackendStatus {
+  running: boolean;    // 端口是否被占用(含外部启动的)
+  is_ours: boolean;    // 是否由 Vite 插件 spawn 的进程
+  pid: number | null;  // 插件 spawn 的子进程 pid
+  port: number;
+}
+
+/** /api/dev/backend/start SSE 事件类型 */
+export type BackendStartEvent =
+  | { type: 'progress'; step: string; message: string }
+  | { type: 'log'; source: 'stdout' | 'stderr'; line: string }
+  | { type: 'result'; already_running: boolean; port: number; pid?: number }
+  | { type: 'error'; message: string };
+
+/** /api/dev/backend/restart SSE 事件类型 */
+export type BackendRestartEvent =
+  | { type: 'progress'; step: string; message: string }
+  | { type: 'log'; source: 'stdout' | 'stderr'; line: string }
+  | { type: 'result'; restarted: boolean; external?: boolean; port: number; pid?: number }
+  | { type: 'error'; message: string };
+
+// --- 本地目录浏览(供目录选择器用)---
+export interface FsEntry {
+  name: string;
+  is_dir: boolean;
+}
+
+export interface FsBrowseResponse {
+  path: string;
+  parent: string | null;  // 已经是根目录时为 null
+  entries: FsEntry[];
+}
+
+// --- /api/dev/env 返回结构(Vite 插件,后端未启动时读 .env)---
+export interface DevEnvResponse {
+  file_exists: boolean;
+  file_path: string;
+  values: Record<string, string>;  // 原始值,未 mask
+}
+
+export interface EnvFieldValue {
+  value: string;       // secret 字段已 mask (例如 "sk-••••bdef")
+  configured: boolean; // 该字段在 .env 里有非空值
+  is_secret: boolean;
+}
+
+export interface EnvConfigResponse {
+  file_exists: boolean;
+  file_path: string;
+  vars: Record<string, EnvFieldValue>;
+  schema: EnvFieldSchema[];
+}
+
+export interface EnvSaveResponse {
+  success: boolean;
+  file_path: string;
+  changed: string[];
+  message: string;
+}
+
 // qaQuery 的完整返回结构（含可选的 SUGGEST_EDIT 修改建议）
 export interface QaQueryResult {
   answer: string;
