@@ -135,7 +135,10 @@ function preprocessChart(chart: string, chartType: string): string {
  * @returns 节点 ID 或 null
  */
 function extractNodeIdByChartType(element: Element, chartType: string): string | null {
-  const domId = element.id;
+  // mermaid v11 在所有内部元素 id 前拼接了 mermaid-<9字符 hash>- 前缀
+  // v10 及更早无此前缀,下面的 replace 不命中时等价于原 id
+  const stripMermaidPrefix = (s: string) => s.replace(/^mermaid-[a-z0-9]{7,12}-/i, '');
+  const domId = stripMermaidPrefix(element.id);
 
   // Block 图表（flowchart/graph）
   if (chartType === 'graph' || chartType === 'flowchart') {
@@ -153,12 +156,13 @@ function extractNodeIdByChartType(element: Element, chartType: string): string |
 
   // UML 类图（classDiagram）
   else if (chartType === 'classDiagram') {
-    const classNode = element.closest('g[id^="classId-"]') as HTMLElement | null;
+    // v11 下 id 带前缀,用 *= 同时兼容 v10/v11
+    const classNode = element.closest('[id*="classId-"]') as HTMLElement | null;
     if (!classNode) {
       return null;
     }
 
-    const rawId = classNode.id;
+    const rawId = stripMermaidPrefix(classNode.id);
     const match = rawId.match(/^classId-(.+?)(?:-\d+)?$/);
     if (!match) {
       return null;
