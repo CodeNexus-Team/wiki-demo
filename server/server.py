@@ -84,7 +84,8 @@ class PageSource(BaseModel):
     """页面来源模型"""
     source_id: str = Field(..., description="来源唯一标识")
     name: str = Field(..., description="文件名")
-    lines: List[str] = Field(..., description="行号范围列表")
+    # 目录型 source 条目可能不携带 lines,默认空列表避免 500
+    lines: List[str] = Field(default_factory=list, description="行号范围列表")
 
 
 class FetchPageResponse(BaseModel):

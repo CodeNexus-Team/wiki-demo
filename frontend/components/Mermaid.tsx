@@ -190,6 +190,25 @@ function extractNodeIdByChartType(element: Element, chartType: string): string |
     }
   }
 
+  // 实体关系图（erDiagram）
+  else if (chartType === 'erDiagram') {
+    // Mermaid ER 实体渲染为 <g class="node"> 容器,外层 id 形如 entity-<Name>-<num>(v11 还会带 mermaid-<hash>- 前缀)。
+    // 容器内有 <text class="er entityLabel"> 放实体名 —— 跟 chart.mapping 的 key 一致。
+    const entityGroup = (element.closest('g.node[id*="entity-"], g[id*="entity-"], g.node') as HTMLElement | null);
+    if (!entityGroup) return null;
+
+    const rawId = stripMermaidPrefix(entityGroup.id);
+    const idMatch = rawId.match(/^entity-(.+?)(?:-\d+)?$/);
+    if (idMatch) return idMatch[1];
+
+    // 回退: 读 entityLabel 的 textContent
+    const labelText = entityGroup.querySelector('text.er.entityLabel, text.entityLabel');
+    const name = labelText?.textContent?.trim();
+    if (name) return name;
+
+    return null;
+  }
+
   // 控制流图（stateDiagram）
   else if (chartType === 'stateDiagram') {
     // 状态图的节点格式
@@ -304,6 +323,8 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
             selector = '.actor, .messageText, g[id^="actor"]';
         } else if (chartType === 'stateDiagram') {
             selector = '.node, .state, g[id^="state-"]';
+        } else if (chartType === 'erDiagram') {
+            selector = '.node, g[id*="entity-"], .er.entityBox, .er.entityLabel';
         }
 
         const interactiveGroup = target.closest(selector);
@@ -338,6 +359,8 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
             selector = '.actor, .messageText, g[id^="actor"]';
         } else if (chartType === 'stateDiagram') {
             selector = '.node, .state, g[id^="state-"]';
+        } else if (chartType === 'erDiagram') {
+            selector = '.node, g[id*="entity-"], .er.entityBox, .er.entityLabel';
         }
 
         const interactiveGroup = target.closest(selector);
@@ -645,6 +668,8 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
       selector = 'g[id^="actor"], .actor, g[id]';
     } else if (chartType === 'stateDiagram') {
       selector = 'g[id^="state-"], .node, .state, g[id]';
+    } else if (chartType === 'erDiagram') {
+      selector = 'g[id*="entity-"], .node, g[id]';
     }
 
     const candidates = container.querySelectorAll(selector);
@@ -716,7 +741,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
           )}
           <div
               ref={containerRef}
-              className={`mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 rounded-xl shadow-sm cursor-default ${getStatusStyles()} ${
+              className={`mermaid-container overflow-x-auto no-scrollbar flex justify-center py-4 rounded-xl shadow-sm cursor-default [&>svg]:max-h-[1200px] ${getStatusStyles()} ${
                 isDarkMode ? 'bg-[#0d1117] border border-[#30363d]' : 'bg-white'
               }`}
               onClick={() => setMenuPosition(null)}

@@ -166,6 +166,38 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
 
   const hasSources = block.sources && block.sources.length > 0;
 
+  // 统一的 markdown 链接渲染:
+  //   - 站内 wiki 链接 (相对路径, .meta.json / .json 结尾) 拦截默认跳转,改走 onPageNavigate;
+  //     数据侧 LLM 常用 .meta.json (源材料命名),磁盘上是 .json,在这里做归一化。
+  //   - 外链 (http/https/mailto) 原样走,并加 target=_blank + rel=noopener 防御。
+  //   - 锚点 (#...) 放行浏览器默认行为。
+  const renderMarkdownLink = useCallback((props: any) => {
+    const { node, href, children, ...rest } = props;
+    const isExternal = typeof href === 'string' && /^(https?:|mailto:)/i.test(href);
+    const isAnchor = typeof href === 'string' && href.startsWith('#');
+    const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (!href || isExternal || isAnchor || !onPageNavigate) return;
+      let normalized = href.replace(/^\.\//, '').replace(/\.meta\.json$/i, '.json');
+      if (!/\.json$/i.test(normalized)) return;
+      // ReactMarkdown 会把中文 href 做 percent-encode (项目 → %E9%A1%B9...)。
+      // 后端 fetch_page 拼的是磁盘原始文件名,不会还原,不解码就 404。
+      try { normalized = decodeURIComponent(normalized); } catch {}
+      e.preventDefault();
+      onPageNavigate(normalized);
+    };
+    return (
+      <a
+        {...rest}
+        href={href}
+        className={theme.link}
+        onClick={handleClick}
+        {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      >
+        {children}
+      </a>
+    );
+  }, [onPageNavigate, theme.link]);
+
   // 稳定的 mermaid 回调，避免每次渲染创建新函数
   const handleMermaidNodeClick = useCallback(
     (nodeId: string, metadata?: MermaidMetadata) => {
@@ -307,6 +339,8 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
           const isActive = isNameActive(name);
           const relatedNodes = nameToNodes[name] || [];
           const hasSource = isSourceFile(name);
+          // 对文件路径只显示 basename,完整路径放 title;非路径名(未命中的类/方法)原样显示。
+          const displayName = hasSource ? name.substring(name.lastIndexOf('/') + 1) : name;
           return (
             <span
               key={name}
@@ -315,7 +349,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
               onClick={() => handleNameClick(name)}
               onContextMenu={(e) => handleNameContextMenu(e, name)}
             >
-              <span className={isActive ? theme.neo4jCard.activeIdText : ''}>{name}</span>
+              <span className={isActive ? theme.neo4jCard.activeIdText : ''}>{displayName}</span>
               {hasSource && <Code size={10} className="ml-0.5 opacity-50" />}
             </span>
           );
@@ -327,8 +361,10 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
   const renderContent = (content: string) => {
     switch (block.type) {
       case 'mermaid':
-        // 合并外部高亮和本地高亮状态
-        const effectiveHighlightedNodeId = localHighlightedNodeId || highlightedMermaidNodeId;
+        // Mermaid 节点 ID 是每张图各自命名的,不同图之间会撞名 (Start/Check/CallService ...);
+        // 全局 highlightedMermaidNodeId 只对触发点击的那个 block 生效,否则多图会一起亮。
+        const effectiveHighlightedNodeId = localHighlightedNodeId
+          || (highlightedBlockId === block.id ? highlightedMermaidNodeId : null);
         // 使用本地内容或原始内容
         const displayContent = localMermaidContent ?? content;
         return (
@@ -425,6 +461,22 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
         const Tag = `h${level}` as React.ElementType;
         const cleanedContent = cleanHeadingContent(content);
 
+        // 标题里常出现 `ClassName.method` 这种反引号代码片段以及 **加粗**,
+        // 直接当纯文本渲染会把反引号/星号显示出来。走一遍 ReactMarkdown 做行内语法渲染,
+        // p 覆盖成 Fragment 避免 <h1> 里嵌 <p>(HTML 非法)。
+        const renderedHeading = (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({children}) => <>{children}</>,
+              code: ({node, ...props}) => <code {...props} className={theme.inlineCode} />,
+              a: renderMarkdownLink,
+            }}
+          >
+            {cleanedContent}
+          </ReactMarkdown>
+        );
+
         const levelKey = `h${level}` as keyof typeof theme.heading;
         const headingStyle = theme.heading[levelKey] || theme.heading.h2;
         const containerStyle = theme.headingContainer[levelKey] || theme.headingContainer.h2;
@@ -473,13 +525,13 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                 onClick={handleHeadingClick}
                 title={`跳转到: ${matchingPagePath?.split('/').pop()?.replace('.json', '')}`}
               >
-                {cleanedContent}
+                {renderedHeading}
                 <span className="ml-2 opacity-0 group-hover/heading:opacity-100 transition-opacity text-[#0071E3]">
                   →
                 </span>
               </Tag>
             ) : (
-              <Tag className={headingStyle}>{cleanedContent}</Tag>
+              <Tag className={headingStyle}>{renderedHeading}</Tag>
             )}
           </div>
         );
@@ -494,7 +546,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
                 ol: ({node, ...props}) => <ol {...props} className={`wiki-list ${theme.ol}`} />,
                 li: ({node, ...props}) => <li {...props} className={theme.li} />,
                 p: ({node, ...props}) => <span {...props} />,
-                a: ({node, ...props}) => <a {...props} className={theme.link} />,
+                a: renderMarkdownLink,
                 code: ({node, ...props}) => <code {...props} className={theme.inlineCode} />,
                 strong: ({node, ...props}) => <strong {...props} className={theme.strong} />,
                 hr: () => theme.hrDot ? (
@@ -543,7 +595,7 @@ const WikiBlockRenderer: React.FC<WikiBlockRendererProps> = ({
               remarkPlugins={[remarkGfm]}
               components={{
                 p: ({node, ...props}) => <p {...props} className={theme.paragraphInner} />,
-                a: ({node, ...props}) => <a {...props} className={theme.link} />,
+                a: renderMarkdownLink,
                 code: ({node, ...props}) => <code {...props} className={theme.inlineCode} />,
                 strong: ({node, ...props}) => <strong {...props} className={theme.strong} />,
                 em: ({node, ...props}) => <em {...props} className={theme.em} />,

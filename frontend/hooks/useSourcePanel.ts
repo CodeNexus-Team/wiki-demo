@@ -52,8 +52,9 @@ export function useSourcePanel(options: UseSourcePanelOptions = {}): UseSourcePa
     const source = sources.find(s => s.source_id === sourceId);
 
     if (source) {
-      const lineRange = source.lines[0];
-      let line = 1;
+      // 目录条目或后端数据不完整时 lines 为 [] —— 跳转到文件但不高亮行。
+      const lineRange = source.lines?.[0];
+      let line: number | undefined;
       let endLine: number | undefined;
 
       if (lineRange) {

@@ -182,7 +182,8 @@ const SourceCodePanel: React.FC<SourceCodePanelProps> = ({ isOpen, onClose, loca
   useEffect(() => {
     if (location) {
       setCurrentFile(location.file);
-      setHighlightLine(location.line);
+      // line 可能缺失(目录条目或 lines 为空) —— 此时只定位文件,不高亮。
+      setHighlightLine(location.line ?? null);
       setHighlightEndLine(location.endLine || null);
 
       // 只展开当前文件所在的目录路径

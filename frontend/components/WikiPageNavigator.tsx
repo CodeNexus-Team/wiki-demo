@@ -58,15 +58,26 @@ function buildPageTree(pages: string[]): WikiPageNode[] {
     });
   });
 
-  // 转换为数组并递归处理，按字典序排序
+  // 转换为数组并递归处理。排序规则:
+  //   1. 名称含「总揽/总览」的置顶 (无论文件/目录) —— 两种字形都常见,同音近义
+  //   2. 目录排在同级文件前
+  //   3. 同类内部按字典序
+  const sortBucket = (node: WikiPageNode): number => {
+    if (node.name.includes('总揽') || node.name.includes('总览')) return 0;
+    if (node.children && node.children.length > 0) return 1;
+    return 2;
+  };
   const convertToArray = (obj: any): WikiPageNode[] => {
     return Object.values(obj)
-      .map((node: any) => ({
+      .map((node: any): WikiPageNode => ({
         path: node.path,
         name: node.name,
         children: node.children ? convertToArray(node.children) : undefined
       }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const diff = sortBucket(a) - sortBucket(b);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      });
   };
 
   return convertToArray(root);

@@ -1,4 +1,46 @@
-import { WikiBlock, WikiPageContent, WikiSource, MermaidMetadata, SourceLocation } from '../types';
+import { WikiBlock, WikiPageContent, WikiSource, MermaidMetadata, SourceLocation, Neo4jIdMapping } from '../types';
+
+const SOURCE_FILE_EXT_RE = /\.(java|py|ts|tsx|js|jsx|go|rs|kt|xml|yml|yaml|json|sql)$/i;
+
+/**
+ * 把 neo4jSource 中的类/方法名向上索引到所在文件,并对每一组 value 去重。
+ *
+ * Wiki 数据里 neo4jSource 经常是一堆类名 (OmsOrderController / OmsOrderService...),
+ * 用户看不到文件路径就没法右键定位源码。每个 Java 文件的 basename 与其主类同名,
+ * 直接拿页面级 sources 做 basename 反查就能还原成 .java 路径,无需运行时查 neo4j。
+ * 没命中的名字 (方法名 / 非 Java 标识符) 保持原样。
+ */
+function resolveNeo4jSourceToFiles(
+  raw: Neo4jIdMapping | undefined,
+  basenameToFile: Map<string, string>
+): Neo4jIdMapping | undefined {
+  if (!raw || Object.keys(raw).length === 0) return undefined;
+
+  const resolveName = (name: string): string => {
+    if (!name) return name;
+    // 已经是路径形式就直接返回
+    if (name.includes('/') && SOURCE_FILE_EXT_RE.test(name)) return name;
+    // 对 "ClassName.method" 这种先取类名部分
+    const classPart = name.split('.')[0];
+    return basenameToFile.get(classPart) || basenameToFile.get(name) || name;
+  };
+
+  const out: Record<string, string | string[]> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const arr = Array.isArray(value) ? value : [value];
+    const resolved: string[] = [];
+    const seen = new Set<string>();
+    for (const item of arr) {
+      const r = resolveName(item);
+      if (!seen.has(r)) {
+        seen.add(r);
+        resolved.push(r);
+      }
+    }
+    out[key] = resolved.length === 1 ? resolved[0] : resolved;
+  }
+  return out;
+}
 
 /**
  * 将 CodeNexus 返回的结构化 Wiki 内容转换为树形 WikiBlock 数组
@@ -13,6 +55,17 @@ export function parseWikiPageToBlocks(
   let blockIdCounter = 0;
 
   const generateId = () => `block-${Date.now()}-${blockIdCounter++}`;
+
+  // 预构建 basename(去扩展名) -> 完整文件路径映射,用于 neo4jSource 向文件级上卷。
+  // 一个页面内同一个类名理论上只对应一个文件,多重出现取最后一次命中(等价)。
+  const basenameToFile = new Map<string, string>();
+  for (const s of sources) {
+    const path = s.name;
+    if (!path || !path.includes('/')) continue;
+    const filename = path.substring(path.lastIndexOf('/') + 1);
+    const basename = filename.replace(/\.[^.]+$/, '');
+    if (basename) basenameToFile.set(basename, path);
+  }
 
   /**
    * 递归处理内容块，返回对应的 WikiBlock
@@ -41,7 +94,7 @@ export function parseWikiPageToBlocks(
           children: [], // 初始化子节点数组
           isCollapsed: false, // 默认展开
           neo4jIds: item.neo4j_id && Object.keys(item.neo4j_id).length > 0 ? item.neo4j_id : undefined,
-          neo4jSource: item.neo4j_source && Object.keys(item.neo4j_source).length > 0 ? item.neo4j_source : undefined
+          neo4jSource: resolveNeo4jSourceToFiles(item.neo4j_source, basenameToFile)
         };
 
         // 递归处理子内容
@@ -113,25 +166,27 @@ export function parseWikiPageToBlocks(
                 // 使用 mapping 中的 sourceRef（source_id）查找对应的 source
                 const source = sources.find(s => s.source_id === sourceRef);
                 if (source) {
-                  const lineRange = source.lines[0] || '1';
-                  let line = 1;
+                  // lines 缺失/为空时保留 undefined,源码面板只跳文件不高亮。
+                  const lineRange = source.lines?.[0];
+                  let line: number | undefined;
                   let endLine: number | undefined;
 
-                  // Handle formats like "10-20" or "10"
-                  const rangeMatch = lineRange.match(/^(\d+)-(\d+)$/);
-                  const singleMatch = lineRange.match(/^(\d+)$/);
+                  if (lineRange) {
+                    const rangeMatch = lineRange.match(/^(\d+)-(\d+)$/);
+                    const singleMatch = lineRange.match(/^(\d+)$/);
 
-                  if (rangeMatch) {
-                    line = parseInt(rangeMatch[1], 10);
-                    endLine = parseInt(rangeMatch[2], 10);
-                  } else if (singleMatch) {
-                    line = parseInt(singleMatch[1], 10);
+                    if (rangeMatch) {
+                      line = parseInt(rangeMatch[1], 10);
+                      endLine = parseInt(rangeMatch[2], 10);
+                    } else if (singleMatch) {
+                      line = parseInt(singleMatch[1], 10);
+                    }
                   }
 
                   sourceMapping[nodeId] = {
                     file: source.name,
-                    line: line,
-                    endLine: endLine
+                    line,
+                    endLine
                   };
                 }
               });
@@ -155,7 +210,7 @@ export function parseWikiPageToBlocks(
               sourceIds: item.source_id,
               sources: blockSources.length > 0 ? blockSources : undefined,
               neo4jIds: item.neo4j_id && Object.keys(item.neo4j_id).length > 0 ? item.neo4j_id : undefined,
-              neo4jSource: item.neo4j_source && Object.keys(item.neo4j_source).length > 0 ? item.neo4j_source : undefined
+              neo4jSource: resolveNeo4jSourceToFiles(item.neo4j_source, basenameToFile)
             };
           }
         }

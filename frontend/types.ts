@@ -33,8 +33,9 @@ export interface ChartData {
 // --- Source Code Mapping Types ---
 export interface SourceLocation {
   file: string; // e.g., "src/main/java/com/cloudmart/order/service/OrderService.java"
-  line: number;
-  endLine?: number; // 结束行号，用于标注代码块范围
+  // lines 缺失/为空时 line 和 endLine 都是 undefined — 源码面板跳文件但不高亮。
+  line?: number;
+  endLine?: number;
   code?: string; // Optional snippet
 }
 
