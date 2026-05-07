@@ -792,14 +792,51 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
             );
             agentSessionIdRef.current = qaResult.session_id ?? null;
 
-            // 判断是否带了修改建议（纯 QA 模式下的自主修改）
+            // 判断模型输出的两种修改路径:
+            //   A. 纯修改 (intent=modify): qaResult.answer 为空 + 有 edit ops → 直接进 diff 模式
+            //   B. QA + 顺手建议 (intent=question 且通过工具发现 wiki 不准): answer 有文字 + 有 edit ops
+            //      → 在气泡上挂"应用"按钮,等用户点击
             const replaceCountQa = qaResult.replace_blocks?.length ?? 0;
             const insertCountQa = qaResult.insert_blocks?.length ?? 0;
             const deleteCountQa = qaResult.delete_blocks?.length ?? 0;
-            const hasSuggestEdit = replaceCountQa + insertCountQa + deleteCountQa > 0;
+            const hasEditOps = replaceCountQa + insertCountQa + deleteCountQa > 0;
+            const hasAnswerText = (qaResult.answer ?? '').trim().length > 0;
 
-            if (hasSuggestEdit) {
-              // 构造一个 ModifyPageResponse 快照供后续 enterDiffMode 使用
+            if (hasEditOps && !hasAnswerText) {
+              // 纯修改: 直接进 diff 模式
+              cancelPendingLoad();
+              isDiffModeRef.current = true;
+              const livePagePath = currentPagePathRef.current;
+              if (livePagePath !== queryPagePathQa) {
+                saveTabStateById(livePagePath, blocksRef.current, new Set());
+                setCurrentPagePath(queryPagePathQa);
+                forceActivateTab(queryPagePathQa);
+              }
+              const modifyResponse: ModifyPageResponse = {
+                insert_blocks: qaResult.insert_blocks,
+                delete_blocks: qaResult.delete_blocks,
+                replace_blocks: qaResult.replace_blocks,
+                insert_sources: qaResult.insert_sources,
+                delete_sources: qaResult.delete_sources,
+              };
+              const modifiedBlocks = await applyModifyPageResponse(modifyResponse, queryBlocksQa);
+              enterDiffMode(modifiedBlocks, modifyResponse, queryBlocksQa);
+              clearAgentSession();
+
+              const summaryParts: string[] = [];
+              if (replaceCountQa > 0) summaryParts.push(`替换 ${replaceCountQa} 个块`);
+              if (insertCountQa > 0) summaryParts.push(`新增 ${insertCountQa} 个块`);
+              if (deleteCountQa > 0) summaryParts.push(`删除 ${deleteCountQa} 个块`);
+              const summary = summaryParts.length > 0
+                ? `已生成修改建议:\n- ${summaryParts.join('\n- ')}\n\n请查看差异预览,确认后点击"应用变更"。`
+                : '未检测到需要修改的内容。';
+              finalizeAssistantMessage(assistantMsgId, summary);
+              setIsLoading(false);
+              return;
+            }
+
+            if (hasEditOps) {
+              // QA + 顺手建议: 答案有正文 + 模型主动提议的修改 → 挂"应用"按钮
               const suggestResponse: ModifyPageResponse = {
                 insert_blocks: qaResult.insert_blocks,
                 delete_blocks: qaResult.delete_blocks,
@@ -812,7 +849,6 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
                 queryBlocks: queryBlocksQa,
                 queryPagePath: queryPagePathQa,
               });
-              // 同时把 suggestEdit 元信息写到消息上，用于渲染按钮
               setChatHistory(prev => prev.map(m =>
                 m.id === assistantMsgId
                   ? {

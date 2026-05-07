@@ -51,6 +51,10 @@ const MERMAID_DARK_THEME = {
   loopTextColor: '#e6edf3',
   mainBkg: '#21262d',
   fontSize: '14px',
+  // ER 图属性行隔行底色: mermaid 默认亮色 (#ffffff / #f4f4f4),暗色模式下必须显式给暗色,
+  // 否则浅灰带 + 浅色字会出现低对比度"幽灵行"。
+  attributeBackgroundColorOdd: '#21262d',
+  attributeBackgroundColorEven: '#161b22',
 };
 
 const MERMAID_FLOWCHART_CONFIG = {
@@ -596,7 +600,11 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, metadata, neo4jIds, neo4jSourc
           const rgb = parseColorToRgb(computedFill);
           if (!rgb) return;
           const [r, g, b] = rgb;
-          if (r > 240 && g > 240 && b > 240) {
+          // 纯白 (r>240 都 >240) 或灰阶亮色 (如 ER 属性行 #f4f4f4) 都翻暗。
+          // 有色 tint (#e8f4ff / #ccffcc) 不落在灰阶区间,保留不动。
+          const grayish = Math.abs(r - g) <= 10 && Math.abs(g - b) <= 10 && Math.abs(r - b) <= 10;
+          const lightEnough = relLum([r, g, b]) > 0.7;
+          if (grayish && lightEnough) {
             (shape as HTMLElement).style.setProperty('fill', '#21262d', 'important');
             const parentNode = shape.closest('.node, g.cluster');
             if (parentNode) whiteFixedNodes.add(parentNode);
