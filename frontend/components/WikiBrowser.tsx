@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { codenexusWikiService } from '../services/codenexusWikiService';
+import { findOverviewPage } from '../utils/findOverviewPage';
 import {
   BookOpen,
   Loader2,
@@ -9,33 +10,6 @@ import {
 interface WikiBrowserProps {
   isDarkMode?: boolean;
   onOpenWikiPage: (pagePath: string, allPages: string[]) => void;
-}
-
-// 总揽页面的常见命名（用于优先打开）
-const OVERVIEW_PAGE_NAMES = ['总揽', '总览', 'overview', 'index', 'README'];
-
-/**
- * 在 wiki 页面列表中找到最适合作为入口的"总揽"页面：
- * 1. 文件名（去扩展名后）匹配常见总揽名称
- * 2. 文件路径深度最浅（根目录优先）
- * 否则返回第一个页面。
- */
-function findOverviewPage(pages: string[]): string {
-  if (pages.length === 0) return '';
-
-  // 优先匹配名称
-  for (const name of OVERVIEW_PAGE_NAMES) {
-    const matched = pages.find(p => {
-      const fileName = p.split('/').pop()?.replace(/\.json$/, '') || '';
-      return fileName.toLowerCase() === name.toLowerCase();
-    });
-    if (matched) return matched;
-  }
-
-  // 退化：返回路径最浅的页面
-  return pages.slice().sort((a, b) =>
-    a.split('/').length - b.split('/').length
-  )[0];
 }
 
 const WikiBrowser: React.FC<WikiBrowserProps> = ({ isDarkMode = false, onOpenWikiPage }) => {

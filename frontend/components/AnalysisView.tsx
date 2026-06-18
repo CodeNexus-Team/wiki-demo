@@ -4,6 +4,7 @@ import { codenexusWikiService } from '../services/codenexusWikiService';
 import { wikiPageCache } from '../services/wikiPageCache';
 import { parseWikiPageToBlocks } from '../utils/wikiContentParser';
 import { toggleBlockCollapse } from '../utils/blockOperations';
+import { findOverviewPage } from '../utils/findOverviewPage';
 
 // Hooks
 import {
@@ -531,7 +532,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ type, wikiHistory, setWikiH
       updateAssistantProgress(workflowMsgId, `生成了 ${workflowResult.wiki_pages.length} 个 Wiki 页面，正在加载...`);
 
       setWikiPages(workflowResult.wiki_pages);
-      const firstPage = workflowResult.wiki_pages[0];
+      // 优先打开「总览/总揽」页;若不存在则退化为路径最浅的页面。
+      const firstPage = findOverviewPage(workflowResult.wiki_pages) || workflowResult.wiki_pages[0];
       setCurrentPagePath(firstPage);
 
       const wikiPage = await codenexusWikiService.fetchPage(firstPage);
